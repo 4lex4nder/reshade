@@ -32,7 +32,7 @@ namespace reshade::d3d11
 		void on_present();
 
 #if RESHADE_FX
-		void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) final;
+		void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb, uintptr_t *white_list_effect_handles, size_t *white_list_effect_handles_len) final;
 #endif
 
 	private:

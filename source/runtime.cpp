@@ -523,12 +523,12 @@ void reshade::runtime::on_present()
 
 		if (_back_buffer_resolved != 0)
 		{
-			runtime::render_effects(cmd_list, _back_buffer_targets[0], _back_buffer_targets[1]);
+			runtime::render_effects(cmd_list, _back_buffer_targets[0], _back_buffer_targets[1], nullptr, nullptr);
 		}
 		else
 		{
 			cmd_list->barrier(back_buffer_resource, api::resource_usage::present, api::resource_usage::render_target);
-			runtime::render_effects(cmd_list, _back_buffer_targets[back_buffer_index * 2], _back_buffer_targets[back_buffer_index * 2 + 1]);
+			runtime::render_effects(cmd_list, _back_buffer_targets[back_buffer_index * 2], _back_buffer_targets[back_buffer_index * 2 + 1], nullptr, nullptr);
 			cmd_list->barrier(back_buffer_resource, api::resource_usage::render_target, api::resource_usage::present);
 		}
 	}
@@ -3128,7 +3128,7 @@ void reshade::runtime::update_effects()
 		load_textures();
 	}
 }
-void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)
+void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb, uintptr_t *white_list_effect_handles, size_t *white_list_effect_handles_len)
 {
 	_effects_rendered_this_frame = true;
 
@@ -3405,6 +3405,20 @@ void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource
 
 		if (tech.passes_data.empty() || !tech.enabled)
 			continue; // Ignore techniques that are not fully loaded or currently disabled
+
+		if (white_list_effect_handles != nullptr && white_list_effect_handles_len != nullptr && *white_list_effect_handles_len > 0) {
+			bool found_technique = false;
+			for (int i = 0; i < *white_list_effect_handles_len; ++i) {
+				if (reinterpret_cast<uintptr_t>(&tech) == white_list_effect_handles[i]) {
+					found_technique = true;
+					break;
+				}
+			}
+		
+			if (!found_technique) {
+				continue;
+			}
+		}
 
 		const auto time_technique_started = std::chrono::high_resolution_clock::now();
 		render_technique(cmd_list, tech, back_buffer_resource, rtv, rtv_srgb);

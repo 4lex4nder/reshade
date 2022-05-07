@@ -12,6 +12,7 @@
 #include <shared_mutex>
 #include <string>
 #include <vector>
+#include <unordered_set>
 #include <unordered_map>
 #include "reshade_api.hpp"
 #if RESHADE_GUI
@@ -71,9 +72,11 @@ namespace reshade
 		/// <summary>
 		/// Applies post-processing effects to the specified render targets.
 		/// </summary>
-		virtual void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) override;
+		virtual void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb, uintptr_t *white_list_effect_handles, size_t *white_list_effect_handles_len) override;
 #else
-		virtual void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb) final { cmd_list; rtv; rtv_srgb; }
+		virtual void render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb, uintptr_t *white_list_effect_handles, size_t *white_list_effect_handles_len) final { cmd_list; rtv; rtv_srgb;
+		white_list_effect_handles; white_list_effect_handles_len;
+		}
 #endif
 
 		/// <summary>

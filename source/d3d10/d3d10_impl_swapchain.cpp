@@ -94,11 +94,11 @@ void reshade::d3d10::swapchain_impl::on_present()
 }
 
 #if RESHADE_FX
-void reshade::d3d10::swapchain_impl::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)
+void reshade::d3d10::swapchain_impl::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb, uintptr_t *white_list_effect_handles, size_t *white_list_effect_handles_len)
 {
 	_app_state.capture();
 
-	runtime::render_effects(cmd_list, rtv, rtv_srgb);
+	runtime::render_effects(cmd_list, rtv, rtv_srgb, white_list_effect_handles, white_list_effect_handles_len);
 
 	_app_state.apply_and_release();
 }

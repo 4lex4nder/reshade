@@ -97,7 +97,7 @@ void reshade::d3d9::swapchain_impl::on_present()
 }
 
 #if RESHADE_FX
-void reshade::d3d9::swapchain_impl::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)
+void reshade::d3d9::swapchain_impl::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb, uintptr_t *white_list_effect_handles, size_t *white_list_effect_handles_len)
 {
 	const auto device_impl = static_cast<class device_impl *>(_device);
 
@@ -107,7 +107,7 @@ void reshade::d3d9::swapchain_impl::render_effects(api::command_list *cmd_list, 
 		software_rendering_enabled = device_impl->_orig->GetSoftwareVertexProcessing(),
 		device_impl->_orig->SetSoftwareVertexProcessing(FALSE); // Disable software vertex processing since it is incompatible with programmable shaders
 
-	runtime::render_effects(cmd_list, rtv, rtv_srgb);
+	runtime::render_effects(cmd_list, rtv, rtv_srgb, white_list_effect_handles, white_list_effect_handles_len);
 
 	_app_state.apply_and_release();
 	if ((device_impl->_cp.BehaviorFlags & D3DCREATE_MIXED_VERTEXPROCESSING) != 0)
