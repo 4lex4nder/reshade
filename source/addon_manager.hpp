@@ -82,6 +82,7 @@ namespace reshade
 			ev != addon_event::push_constants &&
 			ev != addon_event::push_descriptors &&
 			ev != addon_event::bind_descriptor_sets &&
+			ev != addon_event::bind_layout &&
 			ev != addon_event::bind_index_buffer &&
 			ev != addon_event::bind_vertex_buffers &&
 			ev != addon_event::bind_stream_output_buffers &&

@@ -440,6 +440,29 @@ void reshade::d3d12::command_list_impl::bind_descriptor_sets(api::shader_stage s
 	}
 }
 
+void reshade::d3d12::command_list_impl::bind_layout(api::shader_stage stages, api::pipeline_layout layout)
+{
+	const auto root_signature = reinterpret_cast<ID3D12RootSignature *>(layout.handle);
+
+	if (static_cast<uint32_t>(stages & api::shader_stage::all_compute) != 0)
+	{
+		if (root_signature != _current_root_signature[1])
+		{
+			_current_root_signature[1] = root_signature;
+			_orig->SetComputeRootSignature(root_signature);
+		}
+	}
+
+	if (static_cast<uint32_t>(stages & api::shader_stage::all_graphics) != 0)
+	{
+		if (root_signature != _current_root_signature[0])
+		{
+			_current_root_signature[0] = root_signature;
+			_orig->SetGraphicsRootSignature(root_signature);
+		}
+	}
+}
+
 void reshade::d3d12::command_list_impl::bind_index_buffer(api::resource buffer, uint64_t offset, uint32_t index_size)
 {
 	if (buffer.handle != 0)

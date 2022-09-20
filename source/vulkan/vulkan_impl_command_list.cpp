@@ -589,6 +589,10 @@ void reshade::vulkan::command_list_impl::bind_descriptor_sets(api::shader_stage 
 			first, count, reinterpret_cast<const VkDescriptorSet *>(sets), 0, nullptr);
 	}
 }
+void reshade::vulkan::command_list_impl::bind_layout(api::shader_stage stages, api::pipeline_layout layout)
+{
+	// stub
+}
 
 void reshade::vulkan::command_list_impl::bind_index_buffer(api::resource buffer, uint64_t offset, uint32_t index_size)
 {

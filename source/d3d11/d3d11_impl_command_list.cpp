@@ -471,6 +471,11 @@ void reshade::d3d11::device_context_impl::bind_descriptor_sets(api::shader_stage
 	}
 }
 
+void reshade::d3d11::device_context_impl::bind_layout(api::shader_stage stages, api::pipeline_layout layout)
+{
+	// stub
+}
+
 void reshade::d3d11::device_context_impl::bind_index_buffer(api::resource buffer, uint64_t offset, uint32_t index_size)
 {
 	assert(offset <= std::numeric_limits<UINT>::max());

@@ -292,6 +292,10 @@ void reshade::d3d9::device_impl::bind_descriptor_sets(api::shader_stage stages, 
 			api::descriptor_set_update { {}, 0, 0, set_impl->count, set_impl->type, set_impl->descriptors.data() });
 	}
 }
+void reshade::d3d9::device_impl::bind_layout(api::shader_stage stages, api::pipeline_layout layout)
+{
+	// stub
+}
 
 void reshade::d3d9::device_impl::bind_index_buffer(api::resource buffer, [[maybe_unused]] uint64_t offset, [[maybe_unused]] uint32_t index_size)
 {
