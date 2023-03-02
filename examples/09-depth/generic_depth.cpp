@@ -755,7 +755,7 @@ static void on_present(command_queue *, swapchain *swapchain, const rect *, cons
 	}
 }
 
-static void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_list, resource_view, resource_view)
+void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_list, resource_view, resource_view)
 {
 	device *const device = runtime->get_device();
 	auto &data = runtime->get_private_data<generic_depth_data>();
@@ -936,7 +936,7 @@ static void on_begin_render_effects(effect_runtime *runtime, command_list *cmd_l
 			device->destroy_resource_view(prev_shader_resource);
 	}
 }
-static void on_finish_render_effects(effect_runtime *runtime, command_list *cmd_list, resource_view, resource_view)
+void on_finish_render_effects(effect_runtime *runtime, command_list *cmd_list, resource_view, resource_view)
 {
 	const auto &data = runtime->get_private_data<generic_depth_data>();
 
@@ -982,7 +982,7 @@ static inline const char *format_to_string(format format)
 	}
 }
 
-static void draw_settings_overlay(effect_runtime *runtime)
+void draw_settings_overlay(effect_runtime *runtime)
 {
 	bool force_reset = false;
 
@@ -1191,8 +1191,6 @@ static void draw_settings_overlay(effect_runtime *runtime)
 
 void register_addon_depth()
 {
-	reshade::register_overlay(nullptr, draw_settings_overlay);
-
 	reshade::register_event<reshade::addon_event::init_device>(on_init_device);
 	reshade::register_event<reshade::addon_event::init_command_list>(on_init_command_list);
 	reshade::register_event<reshade::addon_event::init_command_queue>(on_init_command_queue);
