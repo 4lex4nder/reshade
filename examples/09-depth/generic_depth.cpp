@@ -59,7 +59,7 @@ struct resource_hash
 	}
 };
 
-struct __declspec(uuid("43319e83-387c-448e-881c-7e68fc2e52c4")) state_tracking
+struct __declspec(uuid("11D20739-13C0-4A33-8E2F-9BAFA3358965")) state_tracking
 {
 	viewport current_viewport = {};
 	resource current_depth_stencil = { 0 };
@@ -113,7 +113,7 @@ struct __declspec(uuid("43319e83-387c-448e-881c-7e68fc2e52c4")) state_tracking
 	}
 };
 
-struct __declspec(uuid("7c6363c7-f94e-437a-9160-141782c44a98")) generic_depth_data
+struct __declspec(uuid("3976D0BD-EC45-4B2B-AD07-54CAFEBABF81")) generic_depth_data
 {
 	// The depth-stencil resource that is currently selected as being the main depth target
 	resource selected_depth_stencil = { 0 };
@@ -161,7 +161,7 @@ struct depth_stencil_resource
 	uint64_t first_used_in_frame = std::numeric_limits<uint64_t>::max();
 };
 
-struct __declspec(uuid("e006e162-33ac-4b9f-b10f-0e15335c7bdb")) generic_depth_device_data
+struct __declspec(uuid("3823791E-A0ED-4EBE-8806-CA300EC57D66")) generic_depth_device_data
 {
 	uint64_t frame_index = 0;
 
