@@ -61,7 +61,7 @@ static bool on_set_uniform_value(reshade::api::effect_runtime *runtime, reshade:
 {
 	history_context &ctx = runtime->get_private_data<history_context>();
 
-	char ui_type[16] = "";
+	char ui_type[16];
 	if (!runtime->get_annotation_string_from_uniform_variable(variable, "ui_type", ui_type))
 		return false;
 
@@ -120,6 +120,11 @@ static bool on_set_uniform_value(reshade::api::effect_runtime *runtime, reshade:
 }
 static bool on_set_technique_state(reshade::api::effect_runtime *runtime, reshade::api::effect_technique technique, bool enabled)
 {
+	if (runtime->get_annotation_int_from_technique(technique, "enabled", nullptr, 0) ||
+		runtime->get_annotation_int_from_technique(technique, "enabled_in_screenshot", nullptr, 0) ||
+		runtime->get_annotation_int_from_technique(technique, "timeout", nullptr, 0))
+		return false;
+
 	history_context &ctx = runtime->get_private_data<history_context>();
 
 	char technique_name[128] = "";
@@ -236,11 +241,11 @@ static void draw_history_window(reshade::api::effect_runtime *runtime)
 					}
 					else if (basetype == reshade::api::format::r32_sint || basetype == reshade::api::format::r32_uint)
 					{
-						char ui_items[512] = ""; size_t ui_items_len = sizeof(ui_items);
-						runtime->get_annotation_string_from_uniform_variable(it->variable_handle, "ui_items", ui_items, &ui_items_len);
-
 						if (strcmp(ui_type, "combo") == 0)
 						{
+							char ui_items[512] = ""; size_t ui_items_len = sizeof(ui_items);
+							runtime->get_annotation_string_from_uniform_variable(it->variable_handle, "ui_items", ui_items, &ui_items_len);
+
 							size_t ui_items_offset = 0;
 							for (uint32_t ui_items_index = 0; ui_items_offset < ui_items_len && ui_items_index != it->after.as_uint[0]; ++ui_items_offset)
 								if (ui_items[ui_items_offset] == '\0')

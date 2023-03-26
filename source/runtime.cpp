@@ -19,6 +19,7 @@
 #include "platform_utils.hpp"
 #include <set>
 #include <thread>
+#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <algorithm>
@@ -28,7 +29,6 @@
 #include <stb_image_dds.h>
 #include <stb_image_write.h>
 #include <stb_image_resize.h>
-#include <malloc.h>
 #include <d3dcompiler.h>
 
 #if RESHADE_FX
@@ -446,7 +446,7 @@ bool reshade::runtime::on_init(input::window_handle window)
 	_frame_count = 0;
 
 	_is_initialized = true;
-	_last_reload_time = std::chrono::high_resolution_clock::now();
+	_last_reload_time = std::chrono::high_resolution_clock::time_point::max();
 
 	_preset_save_successfull = true;
 	_last_screenshot_save_successfull = true;
@@ -984,15 +984,17 @@ void reshade::runtime::load_current_preset()
 {
 	_preset_save_successfull = true;
 
-	const ini_file &config = ini_file::load_cache(_config_path);
 	const ini_file &preset = ini_file::load_cache(_current_preset_path);
 
 	std::vector<std::string> technique_list;
 	preset.get({}, "Techniques", technique_list);
 	std::vector<std::string> sorted_technique_list;
 	preset.get({}, "TechniqueSorting", sorted_technique_list);
-	std::vector<std::pair<std::string, std::string>> preset_preprocessor_definitions;
-	preset.get({}, "PreprocessorDefinitions", preset_preprocessor_definitions);
+
+	std::unordered_map<std::string, std::vector<std::pair<std::string, std::string>>> preset_preprocessor_definitions;
+	preset.get({}, "PreprocessorDefinitions", preset_preprocessor_definitions[{}]);
+	for (const effect &effect : _effects)
+		preset.get(effect.source_file.filename().u8string(), "PreprocessorDefinitions", preset_preprocessor_definitions[effect.source_file.filename().u8string()]);
 
 	// Recompile effects if preprocessor definitions have changed or running in performance mode (in which case all preset values are compile-time constants)
 	if (_reload_remaining_effects != 0) // ... unless this is the 'load_current_preset' call in 'update_effects'
@@ -1004,17 +1006,17 @@ void reshade::runtime::load_current_preset()
 			return; // Preset values are loaded in 'update_effects' during effect loading
 		}
 
-		if (std::find_if(technique_list.begin(), technique_list.end(),
-				[this](const std::string_view &technique_name) {
+		if (std::find_if(technique_list.cbegin(), technique_list.cend(),
+				[this](const std::string &technique_name) {
 					const size_t at_pos = technique_name.find('@');
 					if (at_pos == std::string::npos)
 						return true;
-					const auto it = std::find_if(_effects.begin(), _effects.end(),
-						[effect_name = technique_name.substr(at_pos + 1)](const effect &effect) {
-							return effect_name == effect.source_file.filename().u8string();
+					const auto it = std::find_if(_effects.cbegin(), _effects.cend(),
+						[effect_name = std::filesystem::u8path(technique_name.substr(at_pos + 1))](const effect &effect) {
+							return effect_name == effect.source_file.filename();
 						});
-					return it == _effects.end() || it->skipped;
-				}) != technique_list.end())
+					return it != _effects.cend() && it->skipped;
+				}) != technique_list.cend())
 		{
 			reload_effects();
 			return;
@@ -1022,7 +1024,7 @@ void reshade::runtime::load_current_preset()
 	}
 
 	if (sorted_technique_list.empty())
-		config.get("GENERAL", "TechniqueSorting", sorted_technique_list);
+		ini_file::load_cache(_config_path).get("GENERAL", "TechniqueSorting", sorted_technique_list);
 	if (sorted_technique_list.empty())
 		sorted_technique_list = technique_list;
 
@@ -1033,11 +1035,12 @@ void reshade::runtime::load_current_preset()
 			const technique &rhs = _techniques[rhs_technique_index];
 
 			const std::string lhs_unique = lhs.name + '@' + _effects[lhs.effect_index].source_file.filename().u8string();
-			auto lhs_it = std::find(sorted_technique_list.begin(), sorted_technique_list.end(), lhs_unique);
-			lhs_it = (lhs_it == sorted_technique_list.end()) ? std::find(sorted_technique_list.begin(), sorted_technique_list.end(), lhs.name) : lhs_it;
+			auto lhs_it = std::find(sorted_technique_list.cbegin(), sorted_technique_list.cend(), lhs_unique);
+			lhs_it = (lhs_it == sorted_technique_list.cend()) ? std::find(sorted_technique_list.cbegin(), sorted_technique_list.cend(), lhs.name) : lhs_it;
+
 			const std::string rhs_unique = rhs.name + '@' + _effects[rhs.effect_index].source_file.filename().u8string();
-			auto rhs_it = std::find(sorted_technique_list.begin(), sorted_technique_list.end(), rhs_unique);
-			rhs_it = (rhs_it == sorted_technique_list.end()) ? std::find(sorted_technique_list.begin(), sorted_technique_list.end(), rhs.name) : rhs_it;
+			auto rhs_it = std::find(sorted_technique_list.cbegin(), sorted_technique_list.cend(), rhs_unique);
+			rhs_it = (rhs_it == sorted_technique_list.cend()) ? std::find(sorted_technique_list.cbegin(), sorted_technique_list.cend(), rhs.name) : rhs_it;
 
 			if (lhs_it < rhs_it)
 				return true;
@@ -1052,11 +1055,18 @@ void reshade::runtime::load_current_preset()
 			std::string lhs_label(lhs.annotation_as_string("ui_label"));
 			if (lhs_label.empty())
 				lhs_label = lhs.name;
-			std::transform(lhs_label.begin(), lhs_label.end(), lhs_label.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
+			std::transform(lhs_label.begin(), lhs_label.end(), lhs_label.begin(),
+				[](std::string::value_type c) {
+					return static_cast<std::string::value_type>(std::toupper(c));
+				});
+
 			std::string rhs_label(rhs.annotation_as_string("ui_label"));
 			if (rhs_label.empty())
 				rhs_label = rhs.name;
-			std::transform(rhs_label.begin(), rhs_label.end(), rhs_label.begin(), [](std::string::value_type c) { return static_cast<std::string::value_type>(toupper(c)); });
+			std::transform(rhs_label.begin(), rhs_label.end(), rhs_label.begin(),
+				[](std::string::value_type c) {
+					return static_cast<std::string::value_type>(std::toupper(c));
+				});
 
 			return lhs_label < rhs_label;
 		});
@@ -1071,16 +1081,16 @@ void reshade::runtime::load_current_preset()
 
 	for (effect &effect : _effects)
 	{
+		const std::string effect_name = effect.source_file.filename().u8string();
+
 		for (uniform &variable : effect.uniforms)
 		{
 			if (variable.special != special_uniform::none)
 				continue;
 
-			const std::string section = effect.source_file.filename().u8string();
-
 			if (variable.supports_toggle_key())
 			{
-				if (!preset.get(section, "Key" + variable.name, variable.toggle_key_data))
+				if (!preset.get(effect_name, "Key" + variable.name, variable.toggle_key_data))
 					std::memset(variable.toggle_key_data, 0, sizeof(variable.toggle_key_data));
 			}
 
@@ -1089,23 +1099,24 @@ void reshade::runtime::load_current_preset()
 				reset_uniform_value(variable);
 
 			reshadefx::constant values, values_old;
+
 			switch (variable.type.base)
 			{
 			case reshadefx::type::t_int:
 				get_uniform_value(variable, values.as_int, variable.type.components());
-				preset.get(section, variable.name, values.as_int);
+				preset.get(effect_name, variable.name, values.as_int);
 				set_uniform_value(variable, values.as_int, variable.type.components());
 				break;
 			case reshadefx::type::t_bool:
 			case reshadefx::type::t_uint:
 				get_uniform_value(variable, values.as_uint, variable.type.components());
-				preset.get(section, variable.name, values.as_uint);
+				preset.get(effect_name, variable.name, values.as_uint);
 				set_uniform_value(variable, values.as_uint, variable.type.components());
 				break;
 			case reshadefx::type::t_float:
 				get_uniform_value(variable, values.as_float, variable.type.components());
 				values_old = values;
-				preset.get(section, variable.name, values.as_float);
+				preset.get(effect_name, variable.name, values.as_float);
 				if (_is_in_between_presets_transition)
 				{
 					// Perform smooth transition on floating point values
@@ -1127,8 +1138,8 @@ void reshade::runtime::load_current_preset()
 
 		// Ignore preset if "enabled" annotation is set
 		if (tech.annotation_as_int("enabled") ||
-			std::find(technique_list.begin(), technique_list.end(), unique_name) != technique_list.end() ||
-			std::find(technique_list.begin(), technique_list.end(), tech.name) != technique_list.end())
+			std::find(technique_list.cbegin(), technique_list.cend(), unique_name) != technique_list.cend() ||
+			std::find(technique_list.cbegin(), technique_list.cend(), tech.name) != technique_list.cend())
 			enable_technique(tech);
 		else
 			disable_technique(tech);
@@ -1145,11 +1156,6 @@ void reshade::runtime::load_current_preset()
 
 	// Reverse queue so that effects are enabled in the order they are defined in the preset (since the queue is worked from back to front)
 	std::reverse(_reload_create_queue.begin(), _reload_create_queue.end());
-
-#if RESHADE_ADDON
-	if (!_is_in_api_call)
-		invoke_addon_event<addon_event::reshade_set_current_preset_path>(this, _current_preset_path.u8string().c_str());
-#endif
 }
 void reshade::runtime::save_current_preset() const
 {
@@ -1184,11 +1190,16 @@ void reshade::runtime::save_current_preset() const
 			preset.remove_key({}, "Key" + unique_name);
 	}
 
-	if (preset.has({}, "TechniqueSorting") || !std::equal(technique_list.begin(), technique_list.end(), sorted_technique_list.begin()))
+	if (preset.has({}, "TechniqueSorting") || !std::equal(technique_list.cbegin(), technique_list.cend(), sorted_technique_list.cbegin()))
 		preset.set({}, "TechniqueSorting", std::move(sorted_technique_list));
 
 	preset.set({}, "Techniques", std::move(technique_list));
-	preset.set({}, "PreprocessorDefinitions", _preset_preprocessor_definitions);
+
+	if (const auto preset_it = _preset_preprocessor_definitions.find({});
+		preset_it != _preset_preprocessor_definitions.end() && !preset_it->second.empty())
+		preset.set({}, "PreprocessorDefinitions", preset_it->second);
+	else
+		preset.remove_key({}, "PreprocessorDefinitions");
 
 	// TODO: Do we want to save spec constants here too? The preset will be rather empty in performance mode otherwise.
 	for (size_t effect_index = 0; effect_index < _effects.size(); ++effect_index)
@@ -1198,20 +1209,26 @@ void reshade::runtime::save_current_preset() const
 
 		const effect &effect = _effects[effect_index];
 
+		const std::string effect_name = effect.source_file.filename().u8string();
+
+		if (const auto preset_it = _preset_preprocessor_definitions.find(effect_name);
+			preset_it != _preset_preprocessor_definitions.end() && !preset_it->second.empty())
+			preset.set(effect_name, "PreprocessorDefinitions", preset_it->second);
+		else
+			preset.remove_key(effect_name, "PreprocessorDefinitions");
+
 		for (const uniform &variable : effect.uniforms)
 		{
 			if (variable.special != special_uniform::none)
 				continue;
 
-			const std::string section = effect.source_file.filename().u8string();
-
 			if (variable.supports_toggle_key())
 			{
 				// Save the shortcut key into the preset files
 				if (variable.toggle_key_data[0] != 0)
-					preset.set(section, "Key" + variable.name, variable.toggle_key_data);
+					preset.set(effect_name, "Key" + variable.name, variable.toggle_key_data);
 				else
-					preset.remove_key(section, "Key" + variable.name);
+					preset.remove_key(effect_name, "Key" + variable.name);
 			}
 
 			const unsigned int components = variable.type.components();
@@ -1221,16 +1238,16 @@ void reshade::runtime::save_current_preset() const
 			{
 			case reshadefx::type::t_int:
 				get_uniform_value(variable, values.as_int, components);
-				preset.set(section, variable.name, values.as_int, components);
+				preset.set(effect_name, variable.name, values.as_int, components);
 				break;
 			case reshadefx::type::t_bool:
 			case reshadefx::type::t_uint:
 				get_uniform_value(variable, values.as_uint, components);
-				preset.set(section, variable.name, values.as_uint, components);
+				preset.set(effect_name, variable.name, values.as_uint, components);
 				break;
 			case reshadefx::type::t_float:
 				get_uniform_value(variable, values.as_float, components);
-				preset.set(section, variable.name, values.as_float, components);
+				preset.set(effect_name, variable.name, values.as_float, components);
 				break;
 			}
 		}
@@ -1283,8 +1300,8 @@ bool reshade::runtime::switch_to_next_preset(std::filesystem::path filter_path, 
 		const std::wstring preset_name = preset_path.stem();
 		// Only add those files that are matching the filter text
 		if (filter_text.empty() ||
-			std::search(preset_name.begin(), preset_name.end(), filter_text.native().begin(), filter_text.native().end(),
-				[](auto c1, auto c2) { return towlower(c1) == towlower(c2); }) != preset_name.end())
+			std::search(preset_name.cbegin(), preset_name.cend(), filter_text.native().begin(), filter_text.native().end(),
+				[](auto c1, auto c2) { return towlower(c1) == towlower(c2); }) != preset_name.cend())
 			preset_paths.push_back(std::move(preset_path));
 	}
 
@@ -1330,9 +1347,17 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 	attributes += "vendor=" + std::to_string(_vendor_id) + ';';
 	attributes += "device=" + std::to_string(_device_id) + ';';
 
+	const std::string effect_name = source_file.filename().u8string();
+
 	std::vector<std::pair<std::string, std::string>> preprocessor_definitions = _global_preprocessor_definitions;
 	// Insert preset preprocessor definitions before global ones, so that if there are duplicates, the preset ones are used (since 'add_macro_definition' succeeds only for the first occurance)
-	preprocessor_definitions.insert(preprocessor_definitions.begin(), _preset_preprocessor_definitions.begin(), _preset_preprocessor_definitions.end());
+	if (const auto preset_it = _preset_preprocessor_definitions.find({});
+		preset_it != _preset_preprocessor_definitions.end())
+		preprocessor_definitions.insert(preprocessor_definitions.begin(), preset_it->second.cbegin(), preset_it->second.cend());
+	if (const auto preset_it = _preset_preprocessor_definitions.find(effect_name);
+		preset_it != _preset_preprocessor_definitions.end())
+		preprocessor_definitions.insert(preprocessor_definitions.begin(), preset_it->second.cbegin(), preset_it->second.cend());
+
 	for (const std::pair<std::string, std::string> &definition : preprocessor_definitions)
 		attributes += definition.first + '=' + definition.second + ';';
 
@@ -1359,7 +1384,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 		}
 	}
 
-	attributes += source_file.filename().u8string();
+	attributes += effect_name;
 	attributes += '?';
 	attributes += std::to_string(std::filesystem::last_write_time(source_file, ec).time_since_epoch().count());
 	attributes += ';';
@@ -1390,8 +1415,6 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 		effect.source_hash = source_hash;
 	}
 
-	const std::string effect_name = source_file.filename().u8string();
-
 	if (_effect_load_skipping && !_load_option_disable_skipping && !_worker_threads.empty()) // Only skip during 'load_effects'
 	{
 		if (std::vector<std::string> techniques;
@@ -1413,7 +1436,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 	}
 
 	bool skip_optimization = false;
-	std::string hlsl_preamble;
+	std::string code_preamble;
 
 	bool source_cached = false;
 	std::string source;
@@ -1477,7 +1500,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 
 				const std::string pragma_directive = "#pragma " + pragma.first + ' ' + pragma.second + '\n';
 
-				hlsl_preamble += pragma_directive;
+				code_preamble += pragma_directive;
 				source = "// " + pragma_directive + source;
 			}
 
@@ -1487,7 +1510,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 			{
 				if (definition.first.size() < 8 ||
 					definition.first[0] == '_' ||
-					definition.first.compare(0, 7, "BUFFER_" ) == 0 ||
+					definition.first.compare(0, 7, "BUFFER_") == 0 ||
 					definition.first.compare(0, 8, "RESHADE_") == 0 ||
 					definition.first.find("INCLUDE_") != std::string::npos)
 					continue;
@@ -1523,7 +1546,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 
 				if (source.compare(offset, 7, "#pragma") == 0)
 				{
-					hlsl_preamble += source.substr(offset, (next + 1) - offset);
+					code_preamble += source.substr(offset, (next + 1) - offset);
 				}
 				else if (const size_t equals_index = source.find('=', offset);
 					equals_index != std::string::npos)
@@ -1582,9 +1605,6 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 			{
 				variable.effect_index = effect_index;
 
-				// Copy initial data into uniform storage area
-				reset_uniform_value(variable);
-
 				const std::string_view special = variable.annotation_as_string("source");
 				if (special.empty()) /* Ignore if annotation is missing */
 					variable.special = special_uniform::none;
@@ -1621,6 +1641,9 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 				else
 					variable.special = special_uniform::unknown;
 
+				// Copy initial data into uniform storage area
+				reset_uniform_value(variable);
+
 				effect.uniforms.push_back(std::move(variable));
 			}
 
@@ -1647,34 +1670,34 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 					if (constant.type.is_scalar() && constant.offset != 0)
 						constant.initializer_value.as_uint[0] = constant.initializer_value.as_uint[constant.offset];
 
-					if (effect.module.hlsl.empty())
+					if (_renderer_id >= 0x20000)
 						continue;
 
-					hlsl_preamble += "#define SPEC_CONSTANT_" + constant.name + ' ';
+					code_preamble += "#define SPEC_CONSTANT_" + constant.name + ' ';
 
 					for (unsigned int i = 0; i < constant.type.components(); ++i)
 					{
 						switch (constant.type.base)
 						{
 						case reshadefx::type::t_bool:
-							hlsl_preamble += constant.initializer_value.as_uint[i] ? "true" : "false";
+							code_preamble += constant.initializer_value.as_uint[i] ? "true" : "false";
 							break;
 						case reshadefx::type::t_int:
-							hlsl_preamble += std::to_string(constant.initializer_value.as_int[i]);
+							code_preamble += std::to_string(constant.initializer_value.as_int[i]);
 							break;
 						case reshadefx::type::t_uint:
-							hlsl_preamble += std::to_string(constant.initializer_value.as_uint[i]);
+							code_preamble += std::to_string(constant.initializer_value.as_uint[i]);
 							break;
 						case reshadefx::type::t_float:
-							hlsl_preamble += std::to_string(constant.initializer_value.as_float[i]);
+							code_preamble += std::to_string(constant.initializer_value.as_float[i]);
 							break;
 						}
 
 						if (i + 1 < constant.type.components())
-							hlsl_preamble += ", ";
+							code_preamble += ", ";
 					}
 
-					hlsl_preamble += '\n';
+					code_preamble += '\n';
 				}
 			}
 		}
@@ -1700,7 +1723,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 				assert(_d3d_compiler_module != nullptr);
 
 				// Copy string, since this has to be repeated for every entry point
-				std::string hlsl = hlsl_preamble;
+				std::string hlsl = code_preamble;
 
 				if (_renderer_id == 0x9000)
 				{
@@ -1723,7 +1746,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 				}
 
 				hlsl += "#line 1\n"; // Reset line number, so it matches what is shown when viewing the generated code
-				hlsl += effect.module.hlsl;
+				hlsl.append(effect.module.code.data(), effect.module.code.size());
 
 				// Overwrite position semantic in pixel shaders
 				const D3D_SHADER_MACRO ps_defines[] = {
@@ -1809,12 +1832,12 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 					// De-duplicate error lines (D3DCompiler sometimes repeats the same error multiple times)
 					for (size_t line_offset = 0, next_line_offset; (next_line_offset = d3d_errors_string.find('\n', line_offset)) != std::string::npos; line_offset = next_line_offset + 1)
 					{
-						const std::string_view cur_line(d3d_errors_string.c_str() + line_offset, next_line_offset - line_offset);
+						const std::string_view cur_line(d3d_errors_string.data() + line_offset, next_line_offset - line_offset);
 
 						if (const size_t end_offset = d3d_errors_string.find('\n', next_line_offset + 1);
 							end_offset != std::string::npos)
 						{
-							const std::string_view next_line(d3d_errors_string.c_str() + next_line_offset + 1, end_offset - next_line_offset - 1);
+							const std::string_view next_line(d3d_errors_string.data() + next_line_offset + 1, end_offset - next_line_offset - 1);
 							if (cur_line == next_line)
 							{
 								d3d_errors_string.erase(next_line_offset, end_offset - next_line_offset);
@@ -1867,7 +1890,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 					save_effect_cache(cache_id, "asm", cso_text);
 				}
 			}
-			else if (effect.module.spirv.empty())
+			else if (_renderer_id < 0x20000)
 			{
 				std::string glsl = "#version 430\n#define ENTRY_POINT_" + entry_point.name + " 1\n";
 
@@ -1898,9 +1921,9 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 					glsl += "#define groupMemoryBarrier()\n";
 				}
 
-				glsl += hlsl_preamble;
+				glsl += code_preamble;
 				glsl += "#line 1 0\n"; // Reset line number, so it matches what is shown when viewing the generated code
-				glsl += effect.module.hlsl;
+				glsl.append(effect.module.code.data(), effect.module.code.size());
 
 				cso_text = cso = std::move(glsl);
 			}
@@ -1912,7 +1935,8 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 				// On AMD for instance creating a graphics pipeline just fails with a generic 'VK_ERROR_OUT_OF_HOST_MEMORY'. On NVIDIA artifacts occur on some driver versions.
 				// To work around these problems, create a separate shader module for every entry point and rewrite the SPIR-V module for each to remove all but a single entry point (and associated functions/variables).
 				uint32_t current_function = 0, current_function_offset = 0;
-				std::vector<uint32_t> spirv = effect.module.spirv; // Copy SPIR-V, so that all but the current entry point are only removed from that copy
+				// Copy SPIR-V, so that all but the current entry point are only removed from that copy
+				std::vector<uint32_t> spirv(reinterpret_cast<const uint32_t *>(effect.module.code.data()), reinterpret_cast<const uint32_t *>(effect.module.code.data() + effect.module.code.size()));
 				std::vector<uint32_t> functions_to_remove, variables_to_remove;
 
 				for (uint32_t inst = 5 /* Skip SPIR-V header information */; inst < spirv.size();)
@@ -2081,7 +2105,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &source_file, con
 						}
 					}
 
-					if (std::find(existing_texture->shared.begin(), existing_texture->shared.end(), effect_index) == existing_texture->shared.end())
+					if (std::find(existing_texture->shared.cbegin(), existing_texture->shared.cend(), effect_index) == existing_texture->shared.cend())
 						existing_texture->shared.push_back(effect_index);
 
 					existing_texture->render_target = true;
@@ -2146,7 +2170,7 @@ bool reshade::runtime::create_effect(size_t effect_index)
 	// Create textures now, since they are referenced when building samplers below
 	for (texture &tex : _textures)
 	{
-		if (tex.resource != 0 || std::find(tex.shared.begin(), tex.shared.end(), effect_index) == tex.shared.end())
+		if (tex.resource != 0 || std::find(tex.shared.cbegin(), tex.shared.cend(), effect_index) == tex.shared.cend())
 			continue;
 
 		if (!create_texture(tex))
@@ -2470,14 +2494,14 @@ bool reshade::runtime::create_effect(size_t effect_index)
 					int render_target_count = 0;
 					for (; render_target_count < 8 && !pass_info.render_target_names[render_target_count].empty(); ++render_target_count)
 					{
-						const auto render_target_texture = std::find_if(_textures.begin(), _textures.end(),
+						const auto render_target_texture = std::find_if(_textures.cbegin(), _textures.cend(),
 							[&unique_name = pass_info.render_target_names[render_target_count]](const texture &item) {
 								return item.unique_name == unique_name && (item.resource != 0 || !item.semantic.empty());
 							});
-						assert(render_target_texture != _textures.end());
+						assert(render_target_texture != _textures.cend());
 						assert(render_target_texture->semantic.empty() && render_target_texture->rtv[pass_info.srgb_write_enable] != 0);
 
-						if (std::find(pass_data.modified_resources.begin(), pass_data.modified_resources.end(), render_target_texture->resource) == pass_data.modified_resources.end())
+						if (std::find(pass_data.modified_resources.cbegin(), pass_data.modified_resources.cend(), render_target_texture->resource) == pass_data.modified_resources.cend())
 						{
 							pass_data.modified_resources.push_back(render_target_texture->resource);
 
@@ -2619,11 +2643,11 @@ bool reshade::runtime::create_effect(size_t effect_index)
 
 				for (const reshadefx::sampler_info &info : pass_info.samplers)
 				{
-					const auto sampler_texture = std::find_if(_textures.begin(), _textures.end(),
+					const auto sampler_texture = std::find_if(_textures.cbegin(), _textures.cend(),
 						[&unique_name = info.texture_name](const texture &item) {
 							return item.unique_name == unique_name && (item.resource != 0 || !item.semantic.empty());
 						});
-					assert(sampler_texture != _textures.end());
+					assert(sampler_texture != _textures.cend());
 
 					api::resource_view &srv = sampler_descriptors[sampler_with_resource_view ? info.binding : effect.module.num_sampler_bindings + info.texture_binding].view;
 
@@ -2701,14 +2725,14 @@ bool reshade::runtime::create_effect(size_t effect_index)
 
 				for (const reshadefx::storage_info &info : pass_info.storages)
 				{
-					const auto storage_texture = std::find_if(_textures.begin(), _textures.end(),
+					const auto storage_texture = std::find_if(_textures.cbegin(), _textures.cend(),
 						[&unique_name = info.texture_name](const texture &item) {
 							return item.unique_name == unique_name && (item.resource != 0 || !item.semantic.empty());
 						});
-					assert(storage_texture != _textures.end());
+					assert(storage_texture != _textures.cend());
 					assert(storage_texture->semantic.empty() && storage_texture->uav[info.level] != 0);
 
-					if (std::find(pass_data.modified_resources.begin(), pass_data.modified_resources.end(), storage_texture->resource) == pass_data.modified_resources.end())
+					if (std::find(pass_data.modified_resources.cbegin(), pass_data.modified_resources.cend(), storage_texture->resource) == pass_data.modified_resources.cend())
 					{
 						pass_data.modified_resources.push_back(storage_texture->resource);
 
@@ -3107,7 +3131,7 @@ void reshade::runtime::enable_technique(technique &tech)
 	// Queue effect file for initialization if it was not fully loaded yet
 	if (tech.passes_data.empty() &&
 		// Avoid adding the same effect multiple times to the queue if it contains multiple techniques that were enabled simultaneously
-		std::find(_reload_create_queue.begin(), _reload_create_queue.end(), tech.effect_index) == _reload_create_queue.end())
+		std::find(_reload_create_queue.cbegin(), _reload_create_queue.cend(), tech.effect_index) == _reload_create_queue.cend())
 		_reload_create_queue.push_back(tech.effect_index);
 
 	if (status_changed) // Increase rendering reference count
@@ -3118,7 +3142,7 @@ void reshade::runtime::disable_technique(technique &tech)
 	assert(tech.effect_index < _effects.size());
 
 #if RESHADE_ADDON
-	if (!_is_in_api_call)
+	if (!is_loading() && !_is_in_api_call)
 	{
 		_is_in_api_call = true;
 		const bool skip = invoke_addon_event<addon_event::reshade_set_technique_state>(this, api::effect_technique { reinterpret_cast<uintptr_t>(&tech) }, false);
@@ -3177,17 +3201,14 @@ void reshade::runtime::reorder_techniques(std::vector<size_t> &&technique_indice
 
 void reshade::runtime::load_effects()
 {
-	// Reload preprocessor definitions from current preset before compiling
-	_preset_preprocessor_definitions.clear();
-	ini_file &preset = ini_file::load_cache(_current_preset_path);
-	preset.get({}, "PreprocessorDefinitions", _preset_preprocessor_definitions);
-
 	// Build a list of effect files by walking through the effect search paths
 	const std::vector<std::filesystem::path> effect_files =
 		find_files(_effect_search_paths, { L".fx" });
 
 	if (effect_files.empty())
 		return; // No effect files found, so nothing more to do
+
+	ini_file &preset = ini_file::load_cache(_current_preset_path);
 
 	// Have to be initialized at this point or else the threads spawned below will immediately exit without reducing the remaining effects count
 	assert(_is_initialized);
@@ -3202,6 +3223,12 @@ void reshade::runtime::load_effects()
 			return;
 		}
 	}
+
+	// Reload preprocessor definitions from current preset before compiling to avoid having to recompile again when preset is applied in 'update_effects'
+	_preset_preprocessor_definitions.clear();
+	preset.get({}, "PreprocessorDefinitions", _preset_preprocessor_definitions[{}]);
+	for (const std::filesystem::path &effect_file : effect_files)
+		preset.get(effect_file.filename().u8string(), "PreprocessorDefinitions", _preset_preprocessor_definitions[effect_file.filename().u8string()]);
 
 	// Allocate space for effects which are placed in this array during the 'load_effect' call
 	const size_t offset = _effects.size();
@@ -3229,6 +3256,10 @@ bool reshade::runtime::reload_effect(size_t effect_index)
 
 	const std::filesystem::path source_file = _effects[effect_index].source_file;
 	destroy_effect(effect_index);
+
+	// Make sure 'is_loading' is true while loading the effect
+	_reload_remaining_effects = 1;
+
 	return load_effect(source_file, ini_file::load_cache(_current_preset_path), effect_index, true);
 }
 void reshade::runtime::reload_effects()
@@ -3258,16 +3289,19 @@ void reshade::runtime::destroy_effects()
 			thread.join();
 	_worker_threads.clear();
 
+	// Reset the effect creation queue
+	_reload_create_queue.clear();
+
 	for (size_t effect_index = 0; effect_index < _effects.size(); ++effect_index)
 		destroy_effect(effect_index);
+
+	// Reset the effect list after all resources have been destroyed
+	_effects.clear();
 
 	// Clean up sampler objects
 	for (const auto &[hash, sampler] : _effect_sampler_states)
 		_device->destroy_sampler(sampler);
 	_effect_sampler_states.clear();
-
-	// Reset the effect list after all resources have been destroyed
-	_effects.clear();
 
 	// Unload HLSL compiler which was previously loaded in 'load_effects' above
 	if (_d3d_compiler_module)
@@ -3422,6 +3456,20 @@ void reshade::runtime::update_effects()
 	if (_frame_count == 0 && !_no_reload_on_init && !(_no_reload_for_non_vr && !_is_vr))
 		reload_effects();
 
+#if RESHADE_ADDON
+	if (!is_loading() && _should_save_preprocessor_definitions != std::numeric_limits<size_t>::max())
+	{
+		save_current_preset();
+
+		if (_should_save_preprocessor_definitions < _effects.size())
+			reload_effect(_should_save_preprocessor_definitions);
+		else
+			reload_effects();
+
+		_should_save_preprocessor_definitions = std::numeric_limits<size_t>::max();
+	}
+#endif
+
 	if (_reload_remaining_effects == 0)
 	{
 		// Clear the thread list now that they all have finished
@@ -3433,6 +3481,10 @@ void reshade::runtime::update_effects()
 		// Finished loading effects, so apply preset to figure out which ones need compiling
 		load_current_preset();
 
+#if RESHADE_ADDON
+		invoke_addon_event<addon_event::reshade_set_current_preset_path>(this, _current_preset_path.u8string().c_str());
+#endif
+
 		_last_reload_time = std::chrono::high_resolution_clock::now();
 		_reload_remaining_effects = std::numeric_limits<size_t>::max();
 
@@ -3443,16 +3495,16 @@ void reshade::runtime::update_effects()
 		// Update all code editors after a reload
 		for (editor_instance &instance : _editors)
 		{
-			if (const auto it = std::find_if(_effects.begin(), _effects.end(),
+			if (const auto it = std::find_if(_effects.cbegin(), _effects.cend(),
 					[&instance](const effect &effect) {
 						return effect.source_file == instance.file_path || std::find(effect.included_files.begin(), effect.included_files.end(), instance.file_path) != effect.included_files.end();
 					});
-				it != _effects.end())
+				it != _effects.cend())
 			{
 				// Set effect index again in case it was moved during the reload
-				instance.effect_index = std::distance(_effects.begin(), it);
+				instance.effect_index = std::distance(_effects.cbegin(), it);
 
-				if (instance.entry_point_name.empty() || instance.entry_point_name == "Generated code")
+				if (instance.entry_point_name.empty())
 					open_code_editor(instance);
 				else
 					// Those editors referencing assembly will be updated in a separate step below
@@ -3495,13 +3547,12 @@ void reshade::runtime::update_effects()
 		// Update assembly in all code editors after a reload
 		for (editor_instance &instance : _editors)
 		{
-			if (instance.entry_point_name.empty() || instance.file_path != effect.source_file)
+			if (!instance.generated || instance.entry_point_name.empty() || instance.file_path != effect.source_file)
 				continue;
 
 			assert(instance.effect_index == effect_index);
 
-			if (const auto assembly_it = effect.assembly.find(instance.entry_point_name);
-				assembly_it != effect.assembly.end())
+			if (effect.assembly_text.find(instance.entry_point_name) != effect.assembly_text.end())
 				open_code_editor(instance);
 		}
 #endif
@@ -3563,7 +3614,7 @@ void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource
 						get_uniform_value(variable, data, 4);
 						const std::string_view ui_items = variable.annotation_as_string("ui_items");
 						int num_items = 0;
-						for (size_t offset = 0, next; (next = ui_items.find('\0', offset)) != std::string::npos; offset = next + 1)
+						for (size_t offset = 0, next; (next = ui_items.find('\0', offset)) != std::string_view::npos; offset = next + 1)
 							num_items++;
 						data[0] = (data[0] + 1 >= num_items) ? 0 : data[0] + 1;
 						set_uniform_value(variable, data, 4);
@@ -4043,12 +4094,12 @@ void reshade::runtime::render_technique(technique &tech, api::command_list *cmd_
 #endif
 
 #if RESHADE_ADDON
-	if (!_is_in_api_call)
-	{
-		_is_in_api_call = true;
-		invoke_addon_event<addon_event::reshade_render_technique>(const_cast<runtime *>(this), api::effect_technique { reinterpret_cast<uintptr_t>(&tech) }, cmd_list, back_buffer_rtv, back_buffer_rtv_srgb);
-		_is_in_api_call = false;
-	}
+	if (_is_in_api_call)
+		return;
+
+	_is_in_api_call = true;
+	invoke_addon_event<addon_event::reshade_render_technique>(const_cast<runtime *>(this), api::effect_technique { reinterpret_cast<uintptr_t>(&tech) }, cmd_list, back_buffer_rtv, back_buffer_rtv_srgb);
+	_is_in_api_call = false;
 #endif
 }
 
@@ -4156,16 +4207,18 @@ void reshade::runtime::update_texture(texture &tex, uint32_t width, uint32_t hei
 
 void reshade::runtime::reset_uniform_value(uniform &variable)
 {
-	if (!variable.has_initializer_value)
+	if (variable.special != reshade::special_uniform::none)
 	{
 		std::memset(_effects[variable.effect_index].uniform_data_storage.data() + variable.offset, 0, variable.size);
 		return;
 	}
 
+	static const reshadefx::constant zero = {};
+
 	// Need to use typed setters, to ensure values are properly forced to floating point in D3D9
 	for (size_t i = 0, array_length = (variable.type.is_array() ? variable.type.array_length : 1); i < array_length; ++i)
 	{
-		const reshadefx::constant &value = variable.type.is_array() ? variable.initializer_value.array_data[i] : variable.initializer_value;
+		const reshadefx::constant &value = variable.has_initializer_value ? variable.type.is_array() ? variable.initializer_value.array_data[i] : variable.initializer_value : zero;
 
 		switch (variable.type.base)
 		{
@@ -4234,11 +4287,11 @@ template <> void reshade::runtime::get_uniform_value<bool>(const uniform &variab
 	count = std::min(count, static_cast<size_t>(variable.size / 4));
 	assert(values != nullptr);
 
-	const auto data = static_cast<uint8_t *>(alloca(variable.size));
-	get_uniform_value_data(variable, data, variable.size, array_index);
+	temp_mem<uint8_t, 4 * 16> data(variable.size);
+	get_uniform_value_data(variable, data.p, variable.size, array_index);
 
 	for (size_t i = 0; i < count; ++i)
-		values[i] = reinterpret_cast<const uint32_t *>(data)[i] != 0;
+		values[i] = reinterpret_cast<const uint32_t *>(data.p)[i] != 0;
 }
 template <> void reshade::runtime::get_uniform_value<float>(const uniform &variable, float *values, size_t count, size_t array_index) const
 {
@@ -4251,14 +4304,14 @@ template <> void reshade::runtime::get_uniform_value<float>(const uniform &varia
 	count = std::min(count, static_cast<size_t>(variable.size / 4));
 	assert(values != nullptr);
 
-	const auto data = static_cast<uint8_t *>(alloca(variable.size));
-	get_uniform_value_data(variable, data, variable.size, array_index);
+	temp_mem<uint8_t, 4 * 16> data(variable.size);
+	get_uniform_value_data(variable, data.p, variable.size, array_index);
 
 	for (size_t i = 0; i < count; ++i)
 		if (variable.type.is_signed())
-			values[i] = static_cast<float>(reinterpret_cast<const int32_t *>(data)[i]);
+			values[i] = static_cast<float>(reinterpret_cast<const int32_t *>(data.p)[i]);
 		else
-			values[i] = static_cast<float>(reinterpret_cast<const uint32_t *>(data)[i]);
+			values[i] = static_cast<float>(reinterpret_cast<const uint32_t *>(data.p)[i]);
 }
 template <> void reshade::runtime::get_uniform_value<int32_t>(const uniform &variable, int32_t *values, size_t count, size_t array_index) const
 {
@@ -4271,11 +4324,11 @@ template <> void reshade::runtime::get_uniform_value<int32_t>(const uniform &var
 	count = std::min(count, static_cast<size_t>(variable.size / 4));
 	assert(values != nullptr);
 
-	const auto data = static_cast<uint8_t *>(alloca(variable.size));
-	get_uniform_value_data(variable, data, variable.size, array_index);
+	temp_mem<uint8_t, 4 * 16> data(variable.size);
+	get_uniform_value_data(variable, data.p, variable.size, array_index);
 
 	for (size_t i = 0; i < count; ++i)
-		values[i] = static_cast<int32_t>(reinterpret_cast<const float *>(data)[i]);
+		values[i] = static_cast<int32_t>(reinterpret_cast<const float *>(data.p)[i]);
 }
 template <> void reshade::runtime::get_uniform_value<uint32_t>(const uniform &variable, uint32_t *values, size_t count, size_t array_index) const
 {
@@ -4334,19 +4387,19 @@ template <> void reshade::runtime::set_uniform_value<bool>(uniform &variable, co
 {
 	if (variable.type.is_floating_point() || force_floating_point_value(variable.type, _renderer_id))
 	{
-		const auto data = static_cast<float *>(alloca(count * sizeof(float)));
+		temp_mem<float, 16> data(count);
 		for (size_t i = 0; i < count; ++i)
 			data[i] = values[i] ? 1.0f : 0.0f;
 
-		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(float), array_index);
+		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data.p), count * sizeof(float), array_index);
 	}
 	else
 	{
-		const auto data = static_cast<uint32_t *>(alloca(count * sizeof(uint32_t)));
+		temp_mem<uint32_t, 16> data(count);
 		for (size_t i = 0; i < count; ++i)
 			data[i] = values[i] ? 1 : 0;
 
-		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(uint32_t), array_index);
+		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data.p), count * sizeof(uint32_t), array_index);
 	}
 }
 template <> void reshade::runtime::set_uniform_value<float>(uniform &variable, const float *values, size_t count, size_t array_index)
@@ -4357,22 +4410,22 @@ template <> void reshade::runtime::set_uniform_value<float>(uniform &variable, c
 	}
 	else
 	{
-		const auto data = static_cast<int32_t *>(alloca(count * sizeof(int32_t)));
+		temp_mem<int32_t, 16> data(count);
 		for (size_t i = 0; i < count; ++i)
 			data[i] = static_cast<int32_t>(values[i]);
 
-		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(int32_t), array_index);
+		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data.p), count * sizeof(int32_t), array_index);
 	}
 }
 template <> void reshade::runtime::set_uniform_value<int32_t>(uniform &variable, const int32_t *values, size_t count, size_t array_index)
 {
 	if (variable.type.is_floating_point() || force_floating_point_value(variable.type, _renderer_id))
 	{
-		const auto data = static_cast<float *>(alloca(count * sizeof(float)));
+		temp_mem<float, 16> data(count);
 		for (size_t i = 0; i < count; ++i)
 			data[i] = static_cast<float>(values[i]);
 
-		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(float), array_index);
+		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data.p), count * sizeof(float), array_index);
 	}
 	else
 	{
@@ -4383,11 +4436,11 @@ template <> void reshade::runtime::set_uniform_value<uint32_t>(uniform &variable
 {
 	if (variable.type.is_floating_point() || force_floating_point_value(variable.type, _renderer_id))
 	{
-		const auto data = static_cast<float *>(alloca(count * sizeof(float)));
+		temp_mem<float, 16> data(count);
 		for (size_t i = 0; i < count; ++i)
 			data[i] = static_cast<float>(values[i]);
 
-		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(float), array_index);
+		set_uniform_value_data(variable, reinterpret_cast<const uint8_t *>(data.p), count * sizeof(float), array_index);
 	}
 	else
 	{
@@ -4456,17 +4509,17 @@ static std::string expand_macro_string(const std::string &input, std::vector<std
 			}
 		}
 
-		std::string_view replacing = std::string_view(input).substr(macro_beg + 1, macro_end - (macro_beg + 1));
+		std::string_view replacing(input);
+		replacing = replacing.substr(macro_beg + 1, macro_end - (macro_beg + 1));
 		size_t colon_pos = replacing.find(':');
 
 		std::string name;
-		if (colon_pos == std::string::npos)
+		if (colon_pos == std::string_view::npos)
 			name = replacing;
 		else
 			name = replacing.substr(0, colon_pos);
 
 		std::string value;
-
 		for (const std::pair<std::string, std::string> &macro : macros)
 		{
 			if (_stricmp(name.c_str(), macro.first.c_str()) == 0)
@@ -4476,7 +4529,7 @@ static std::string expand_macro_string(const std::string &input, std::vector<std
 			}
 		}
 
-		if (colon_pos == std::string::npos)
+		if (colon_pos == std::string_view::npos)
 		{
 			result += value;
 		}
@@ -4485,7 +4538,7 @@ static std::string expand_macro_string(const std::string &input, std::vector<std
 			std::string_view param = replacing.substr(colon_pos + 1);
 
 			if (const size_t insert_pos = param.find('$');
-				insert_pos != std::string::npos)
+				insert_pos != std::string_view::npos)
 			{
 				result += param.substr(0, insert_pos);
 				result += value;
@@ -4501,7 +4554,7 @@ static std::string expand_macro_string(const std::string &input, std::vector<std
 	return result;
 }
 
-void reshade::runtime::save_screenshot(const std::string &postfix)
+void reshade::runtime::save_screenshot(const std::string_view &postfix)
 {
 	const unsigned int screenshot_count = _screenshot_count;
 

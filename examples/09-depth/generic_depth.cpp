@@ -356,7 +356,7 @@ static void update_effect_runtime(effect_runtime *runtime)
 	runtime->update_texture_bindings("DEPTH", instance.selected_shader_resource);
 
 	runtime->enumerate_uniform_variables(nullptr, [&instance](effect_runtime *runtime, effect_uniform_variable variable) {
-		char source[32] = "";
+		char source[32];
 		if (runtime->get_annotation_string_from_uniform_variable(variable, "source", source) &&
 			std::strcmp(source, "bufready_depth") == 0)
 			runtime->set_uniform_value_bool(variable, instance.selected_shader_resource != 0);
@@ -470,7 +470,7 @@ static bool on_create_resource(device *device, resource_desc &desc, subresource_
 static bool on_create_resource_view(device *device, resource resource, resource_usage usage_type, resource_view_desc &desc)
 {
 	// A view cannot be created with a typeless format (which was set in 'on_create_resource' above), so fix it in case defaults are used
-	if ((device->get_api() != device_api::d3d10 && device->get_api() != device_api::d3d11) || desc.format != format::unknown)
+	if ((device->get_api() != device_api::d3d10 && device->get_api() != device_api::d3d11) || (desc.format != format::unknown && desc.format != format_to_typeless(desc.format)))
 		return false;
 
 	const resource_desc texture_desc = device->get_resource_desc(resource);

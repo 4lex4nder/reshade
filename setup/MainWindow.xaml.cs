@@ -27,20 +27,18 @@ namespace ReShade.Setup
 {
 	public partial class MainWindow
 	{
-		bool isHeadless = false;
-		bool isElevated = WindowsIdentity.GetCurrent().Owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid);
-		bool isFinished = false;
+		readonly bool isHeadless = false;
+		readonly bool isElevated = WindowsIdentity.GetCurrent().Owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid);
 
 		IniFile packagesIni;
 		IniFile compatibilityIni;
 
-		StatusPage status = new StatusPage();
-		SelectAppPage appPage = new SelectAppPage();
+		readonly StatusPage status = new StatusPage();
+		readonly SelectAppPage appPage = new SelectAppPage();
 
 		Api targetApi = Api.Unknown;
+		InstallOperation operation = InstallOperation.Default;
 		bool is64Bit;
-		bool isUpdate;
-		bool isUninstall;
 		string targetPath;
 		string targetName;
 		string configPath;
@@ -80,8 +78,11 @@ namespace ReShade.Setup
 				}
 			}
 
-			// Add support for TLS 1.2, so that HTTPS connection to GitHub succeeds
-			ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+			// Add support for TLS 1.2 and 1.3, so that HTTPS connection to GitHub succeeds
+			if (ServicePointManager.SecurityProtocol != 0 /* Default */)
+			{
+				ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | (SecurityProtocolType)0x3000 /* Tls13 */;
+			}
 
 			var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
 
@@ -106,6 +107,7 @@ namespace ReShade.Setup
 					if (args[i] == "--api")
 					{
 						string api = args[++i];
+
 						if (api == "d3d9")
 						{
 							targetApi = Api.D3D9;
@@ -151,17 +153,22 @@ namespace ReShade.Setup
 					if (args[i] == "--state")
 					{
 						string state = args[++i];
+
 						if (state == "finished")
 						{
-							isFinished = true;
+							operation = InstallOperation.Finished;
 						}
 						else if (state == "update")
 						{
-							isUpdate = true;
+							operation = InstallOperation.Update;
+						}
+						else if (state == "updateall")
+						{
+							operation = InstallOperation.UpdateEffects;
 						}
 						else if (state == "uninstall")
 						{
-							isUninstall = true;
+							operation = InstallOperation.Uninstall;
 						}
 					}
 				}
@@ -175,20 +182,20 @@ namespace ReShade.Setup
 
 			if (targetPath != null)
 			{
-				if (isFinished)
+				if (operation == InstallOperation.Finished)
 				{
-					InstallStep8();
+					InstallStep_Finish();
 				}
 				else if (targetApi != Api.Unknown)
 				{
 					var peInfo = new PEInfo(targetPath);
 					is64Bit = peInfo.Type == PEInfo.BinaryType.IMAGE_FILE_MACHINE_AMD64;
 
-					RunTaskWithExceptionHandling(InstallStep2);
+					RunTaskWithExceptionHandling(InstallStep_CheckExistingInstallation);
 				}
 				else
 				{
-					RunTaskWithExceptionHandling(InstallStep1);
+					RunTaskWithExceptionHandling(InstallStep_AnalyzeExecutable);
 				}
 			}
 			else if (isHeadless)
@@ -284,11 +291,26 @@ namespace ReShade.Setup
 
 		void AddSearchPath(List<string> searchPaths, string newPath)
 		{
+			const string wildcard = "**";
+
+			// Use a wildcard search path by default
+			if (searchPaths.Count == 0)
+			{
+				searchPaths.Add(newPath + Path.DirectorySeparatorChar + wildcard);
+				return;
+			}
+
+			// Avoid adding search paths already covered by an existing wildcard search path
+			if (searchPaths.Any(searchPath => searchPath.EndsWith(wildcard) && newPath.StartsWith(searchPath.Remove(searchPath.Length - wildcard.Length))))
+			{
+				return;
+			}
+
+			// Filter out invalid search paths (and those with remaining wildcards that were not handled above)
+			var validSearchPaths = searchPaths.Where(searchPath => searchPath.IndexOfAny(Path.GetInvalidPathChars()) < 0);
+
 			try
 			{
-				// Filter out search paths with wildcards
-				var validSearchPaths = searchPaths.Where(searchPath => searchPath.IndexOfAny(Path.GetInvalidPathChars()) < 0);
-
 				// Avoid adding duplicate search paths (relative or absolute)
 				if (validSearchPaths.Any(searchPath => Path.GetFullPath(searchPath) == Path.GetFullPath(newPath)))
 				{
@@ -344,9 +366,7 @@ namespace ReShade.Setup
 
 		void ResetStatus()
 		{
-			isFinished = false;
-			isUpdate = false;
-			isUninstall = false;
+			operation = InstallOperation.Default;
 
 			targetApi = Api.Unknown;
 			targetPath = targetName = configPath = modulePath = presetPath = tempPath = tempPathEffects = tempPathTextures = targetPathEffects = targetPathTextures = downloadPath = null;
@@ -384,7 +404,7 @@ namespace ReShade.Setup
 		}
 		void UpdateStatusAndFinish(bool success, string message)
 		{
-			isFinished = true;
+			operation = InstallOperation.Finished;
 
 			Dispatcher.Invoke(() =>
 			{
@@ -439,17 +459,20 @@ namespace ReShade.Setup
 					break;
 			}
 
-			if (isFinished)
+			switch (operation)
 			{
-				startInfo.Arguments += " --state finished";
-			}
-			else if (isUpdate)
-			{
-				startInfo.Arguments += " --state update";
-			}
-			else if (isUninstall)
-			{
-				startInfo.Arguments += " --state uninstall";
+				case InstallOperation.Finished:
+					startInfo.Arguments += " --state finished";
+					break;
+				case InstallOperation.Update:
+					startInfo.Arguments += " --state update";
+					break;
+				case InstallOperation.UpdateEffects:
+					startInfo.Arguments += " --state updateall";
+					break;
+				case InstallOperation.Uninstall:
+					startInfo.Arguments += " --state uninstall";
+					break;
 			}
 
 			try
@@ -524,7 +547,7 @@ namespace ReShade.Setup
 			}
 		}
 
-		void InstallStep0()
+		void InstallStep_CheckPrivileges()
 		{
 			if (!isElevated && !IsWritable(Path.GetDirectoryName(targetPath)))
 			{
@@ -532,10 +555,10 @@ namespace ReShade.Setup
 			}
 			else
 			{
-				RunTaskWithExceptionHandling(InstallStep1);
+				RunTaskWithExceptionHandling(InstallStep_AnalyzeExecutable);
 			}
 		}
-		void InstallStep1()
+		void InstallStep_AnalyzeExecutable()
 		{
 			UpdateStatus("Analyzing executable ...");
 
@@ -640,7 +663,7 @@ namespace ReShade.Setup
 					targetApi = Api.Vulkan;
 				}
 
-				InstallStep2();
+				InstallStep_CheckExistingInstallation();
 				return;
 			}
 
@@ -655,7 +678,7 @@ namespace ReShade.Setup
 				CurrentPage.Navigate(page);
 			});
 		}
-		void InstallStep2()
+		void InstallStep_CheckExistingInstallation()
 		{
 			UpdateStatus("Checking installation status ...");
 
@@ -704,9 +727,9 @@ namespace ReShade.Setup
 
 			configPath = Path.Combine(basePath, "ReShade.ini");
 
-			if (isUninstall)
+			if (operation == InstallOperation.Uninstall)
 			{
-				UninstallStep0();
+				UninstallStep_UninstallReShadeModule();
 				return;
 			}
 
@@ -717,7 +740,7 @@ namespace ReShade.Setup
 				var moduleName = is64Bit ? "ReShade64" : "ReShade32";
 				modulePath = Path.Combine(commonPath, moduleName, moduleName + ".dll");
 
-				if (!isUpdate && File.Exists(configPath))
+				if (operation != InstallOperation.Update && operation != InstallOperation.UpdateEffects && File.Exists(configPath))
 				{
 					if (isHeadless)
 					{
@@ -770,7 +793,7 @@ namespace ReShade.Setup
 					configPath = configPathAlt;
 				}
 
-				if (!isUpdate && ModuleExists(modulePath, out isReShade))
+				if (operation != InstallOperation.Update && operation != InstallOperation.UpdateEffects && ModuleExists(modulePath, out isReShade))
 				{
 					if (isReShade)
 					{
@@ -799,7 +822,7 @@ namespace ReShade.Setup
 			{
 				string conflictingModulePath = Path.Combine(basePath, conflictingModuleName);
 
-				if (!isUpdate && ModuleExists(conflictingModulePath, out isReShade) && isReShade)
+				if (operation != InstallOperation.Update && operation != InstallOperation.UpdateEffects && ModuleExists(conflictingModulePath, out isReShade) && isReShade)
 				{
 					if (isHeadless)
 					{
@@ -818,9 +841,9 @@ namespace ReShade.Setup
 				}
 			}
 
-			InstallStep3();
+			InstallStep_InstallReShadeModule();
 		}
-		void InstallStep3()
+		void InstallStep_InstallReShadeModule()
 		{
 			UpdateStatus("Installing ReShade ...");
 
@@ -1024,7 +1047,7 @@ namespace ReShade.Setup
 				catch (Exception ex)
 				{
 					UpdateStatusAndFinish(false, "Failed to install " + Path.GetFileName(modulePath) + ":\n" + ex.Message +
-							(isUpdate ? "\n\nMake sure the target application is not still running!" : string.Empty));
+							(operation != InstallOperation.Default ? "\n\nMake sure the target application is not still running!" : string.Empty));
 					return;
 				}
 
@@ -1270,7 +1293,7 @@ In that event here are some steps you can try to resolve this:
 			MakeWritable(Path.Combine(basePath, "ReShade.log"));
 			MakeWritable(Path.Combine(basePath, "ReShadePreset.ini"));
 
-			if (!isHeadless)
+			if (!isHeadless && operation != InstallOperation.Update)
 			{
 				// Only show the selection dialog if there are actually packages to choose
 				DownloadEffectPackagesIni();
@@ -1293,12 +1316,12 @@ In that event here are some steps you can try to resolve this:
 			// Add default search paths if no config exists
 			if (!config.HasValue("GENERAL", "EffectSearchPaths") && !config.HasValue("GENERAL", "TextureSearchPaths"))
 			{
-				WriteSearchPaths(".\\", ".\\");
+				WriteSearchPaths(".\\reshade-shaders\\Shaders", ".\\reshade-shaders\\Textures");
 			}
 
-			InstallStep8();
+			InstallStep_Finish();
 		}
-		void InstallStep4()
+		void InstallStep_CheckPreset()
 		{
 			var effectFiles = new List<string>();
 
@@ -1345,7 +1368,7 @@ In that event here are some steps you can try to resolve this:
 				CurrentPage.Navigate(page);
 			});
 		}
-		void InstallStep5()
+		void InstallStep_DownloadEffectPackage()
 		{
 			package = packages.Dequeue();
 			downloadPath = Path.GetTempFileName();
@@ -1362,7 +1385,7 @@ In that event here are some steps you can try to resolve this:
 				}
 				else
 				{
-					InstallStep6();
+					InstallStep_ExtractEffectPackage();
 				}
 			};
 
@@ -1384,7 +1407,7 @@ In that event here are some steps you can try to resolve this:
 				UpdateStatusAndFinish(false, "Failed to download from " + package.DownloadUrl + ":\n" + ex.Message);
 			}
 		}
-		void InstallStep6()
+		void InstallStep_ExtractEffectPackage()
 		{
 			UpdateStatus("Extracting " + package.PackageName + " ...");
 
@@ -1404,12 +1427,13 @@ In that event here are some steps you can try to resolve this:
 
 				ZipFile.ExtractToDirectory(downloadPath, tempPath);
 
+				effects = Directory.GetFiles(tempPath, "*.fx", SearchOption.AllDirectories);
+
 				// First check for a standard directory name
 				tempPathEffects = Directory.GetDirectories(tempPath, "Shaders", SearchOption.AllDirectories).FirstOrDefault();
 				tempPathTextures = Directory.GetDirectories(tempPath, "Textures", SearchOption.AllDirectories).FirstOrDefault();
 
 				// If that does not exist, look for the first directory that contains shaders/textures
-				effects = Directory.GetFiles(tempPath, "*.fx", SearchOption.AllDirectories);
 				if (tempPathEffects == null)
 				{
 					tempPathEffects = effects.Select(x => Path.GetDirectoryName(x)).OrderBy(x => x.Length).FirstOrDefault();
@@ -1440,20 +1464,6 @@ In that event here are some steps you can try to resolve this:
 
 					effects = effects.Except(denyEffectFiles).ToArray();
 				}
-
-				// Show file selection dialog
-				if (!isHeadless && package.Enabled == null)
-				{
-					effects = effects.Select(x => targetPathEffects + x.Remove(0, tempPathEffects.Length)).ToArray();
-
-					Dispatcher.Invoke(() =>
-					{
-						var page = new SelectEffectsPage(package.PackageName, effects);
-
-						CurrentPage.Navigate(page);
-					});
-					return;
-				}
 			}
 			catch (Exception ex)
 			{
@@ -1461,9 +1471,23 @@ In that event here are some steps you can try to resolve this:
 				return;
 			}
 
-			InstallStep7();
+			// Show file selection dialog
+			if (!isHeadless && package.Enabled == null)
+			{
+				effects = effects.Select(x => targetPathEffects + x.Remove(0, tempPathEffects.Length)).ToArray();
+
+				Dispatcher.Invoke(() =>
+				{
+					var page = new SelectEffectsPage(package.PackageName, effects);
+
+					CurrentPage.Navigate(page);
+				});
+				return;
+			}
+
+			InstallStep_InstallEffectPackage();
 		}
-		void InstallStep7()
+		void InstallStep_InstallEffectPackage()
 		{
 			try
 			{
@@ -1482,7 +1506,7 @@ In that event here are some steps you can try to resolve this:
 			}
 			catch (Exception ex)
 			{
-				UpdateStatusAndFinish(false, "Failed to extract " + package.PackageName + ":\n" + ex.Message);
+				UpdateStatusAndFinish(false, "Failed to install " + package.PackageName + ":\n" + ex.Message);
 				return;
 			}
 
@@ -1490,19 +1514,19 @@ In that event here are some steps you can try to resolve this:
 
 			if (packages.Count != 0)
 			{
-				InstallStep5();
+				InstallStep_DownloadEffectPackage();
 			}
 			else
 			{
-				InstallStep8();
+				InstallStep_Finish();
 			}
 		}
-		void InstallStep8()
+		void InstallStep_Finish()
 		{
 			UpdateStatusAndFinish(true, "Successfully installed ReShade." + (isHeadless ? string.Empty : "\nClick the \"Finish\" button to exit the setup tool."));
 		}
 
-		void UninstallStep0()
+		void UninstallStep_UninstallReShadeModule()
 		{
 			if (targetApi == Api.Vulkan)
 			{
@@ -1596,13 +1620,13 @@ In that event here are some steps you can try to resolve this:
 			catch (Exception ex)
 			{
 				UpdateStatusAndFinish(false, "Failed to delete some ReShade files:\n" + ex.Message +
-					(isUninstall ? "\n\nMake sure the target application is not still running!" : string.Empty));
+					(operation != InstallOperation.Default ? "\n\nMake sure the target application is not still running!" : string.Empty));
 				return;
 			}
 
-			UninstallStep1();
+			UninstallStep_Finish();
 		}
-		void UninstallStep1()
+		void UninstallStep_Finish()
 		{
 			UpdateStatusAndFinish(true, "Successfully uninstalled ReShade." + (isHeadless ? string.Empty : "\nClick the \"Finish\" button to exit the setup tool."));
 		}
@@ -1615,7 +1639,7 @@ In that event here are some steps you can try to resolve this:
 
 		void OnNextButtonClick(object sender, RoutedEventArgs e)
 		{
-			if (isFinished)
+			if (operation == InstallOperation.Finished)
 			{
 				Close();
 				return;
@@ -1627,7 +1651,7 @@ In that event here are some steps you can try to resolve this:
 
 				targetPath = appPage.FileName;
 
-				InstallStep0();
+				InstallStep_CheckPrivileges();
 				return;
 			}
 
@@ -1650,23 +1674,31 @@ In that event here are some steps you can try to resolve this:
 					targetApi = Api.Vulkan;
 				}
 
-				RunTaskWithExceptionHandling(InstallStep2);
+				RunTaskWithExceptionHandling(InstallStep_CheckExistingInstallation);
 				return;
 			}
 
 			if (CurrentPage.Content is SelectUninstallPage uninstallPage)
 			{
-				if (uninstallPage.UpdateButton.IsChecked == true)
+				if (uninstallPage.UninstallButton.IsChecked == true)
 				{
-					isUpdate = true;
+					operation = InstallOperation.Uninstall;
 
-					RunTaskWithExceptionHandling(InstallStep3);
+					RunTaskWithExceptionHandling(UninstallStep_UninstallReShadeModule);
 				}
 				else
 				{
-					isUninstall = true;
+					if (uninstallPage.UpdateButton.IsChecked == true)
+					{
+						operation = InstallOperation.Update;
 
-					RunTaskWithExceptionHandling(UninstallStep0);
+					}
+					if (uninstallPage.UpdateEffectsButton.IsChecked == true)
+					{
+						operation = InstallOperation.UpdateEffects;
+					}
+
+					RunTaskWithExceptionHandling(InstallStep_InstallReShadeModule);
 				}
 				return;
 			}
@@ -1675,7 +1707,7 @@ In that event here are some steps you can try to resolve this:
 			{
 				presetPath = presetPage.FileName;
 
-				RunTaskWithExceptionHandling(InstallStep4);
+				RunTaskWithExceptionHandling(InstallStep_CheckPreset);
 				return;
 			}
 
@@ -1685,11 +1717,11 @@ In that event here are some steps you can try to resolve this:
 
 				if (packages.Count != 0)
 				{
-					RunTaskWithExceptionHandling(InstallStep5);
+					RunTaskWithExceptionHandling(InstallStep_DownloadEffectPackage);
 				}
 				else
 				{
-					RunTaskWithExceptionHandling(InstallStep8);
+					RunTaskWithExceptionHandling(InstallStep_Finish);
 				}
 				return;
 			}
@@ -1704,7 +1736,7 @@ In that event here are some steps you can try to resolve this:
 						File.Delete(tempPathEffects + filePath.Remove(0, targetPathEffects.Length));
 					}
 
-					InstallStep7();
+					InstallStep_InstallEffectPackage();
 				});
 				return;
 			}
@@ -1721,23 +1753,23 @@ In that event here are some steps you can try to resolve this:
 			{
 				presetPath = null;
 
-				RunTaskWithExceptionHandling(InstallStep4);
+				RunTaskWithExceptionHandling(InstallStep_CheckPreset);
 				return;
 			}
 
 			if (CurrentPage.Content is SelectPackagesPage)
 			{
-				RunTaskWithExceptionHandling(InstallStep8);
+				RunTaskWithExceptionHandling(InstallStep_Finish);
 				return;
 			}
 
 			if (CurrentPage.Content is SelectEffectsPage)
 			{
-				RunTaskWithExceptionHandling(InstallStep7);
+				RunTaskWithExceptionHandling(InstallStep_InstallEffectPackage);
 				return;
 			}
 
-			if (isFinished)
+			if (operation == InstallOperation.Finished)
 			{
 				ResetStatus();
 				return;
@@ -1748,6 +1780,8 @@ In that event here are some steps you can try to resolve this:
 
 		void OnCurrentPageNavigated(object sender, NavigationEventArgs e)
 		{
+			bool isFinished = operation == InstallOperation.Finished;
+
 			NextButton.Content = isFinished ? "_Finish" : "_Next";
 			CancelButton.Content = isFinished ? "_Back" : (e.Content is SelectPresetPage || e.Content is SelectPackagesPage || e.Content is SelectEffectsPage) ? "_Skip" : (e.Content is SelectAppPage) ? "_Close" : "_Cancel";
 

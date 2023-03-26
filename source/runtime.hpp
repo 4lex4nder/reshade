@@ -22,7 +22,6 @@ class ini_file;
 
 namespace reshade
 {
-	// Forward declarations to avoid excessive #include
 	struct effect;
 	struct uniform;
 	struct texture;
@@ -35,7 +34,7 @@ namespace reshade
 	{
 	public:
 		/// <summary>
-		/// Gets the handle of the window this swap chain was created with.
+		/// Gets the handle of the window the swap chain associated with this effect runtime was created with.
 		/// </summary>
 		void *get_hwnd() const override;
 
@@ -78,10 +77,10 @@ namespace reshade
 		/// <summary>
 		/// Captures a screenshot of the current back buffer resource and writes it to an image file on disk.
 		/// </summary>
-		void save_screenshot(const std::string &postfix = std::string());
+		void save_screenshot(const std::string_view &postfix = std::string_view());
 		bool capture_screenshot(uint8_t *pixels) final { return get_texture_data(_back_buffer_resolved != 0 ? _back_buffer_resolved : get_current_back_buffer(), _back_buffer_resolved != 0 ? api::resource_usage::render_target : api::resource_usage::present, pixels); }
 
-		void get_screenshot_width_and_height(uint32_t *width, uint32_t *height) const final { *width = _width; *height = _height; }
+		void get_screenshot_width_and_height(uint32_t *out_width, uint32_t *out_height) const final { *out_width = _width; *out_height = _height; }
 
 		bool is_key_down(uint32_t keycode) const final;
 		bool is_key_pressed(uint32_t keycode) const final;
@@ -90,7 +89,12 @@ namespace reshade
 		bool is_mouse_button_pressed(uint32_t button) const final;
 		bool is_mouse_button_released(uint32_t button) const final;
 
+		uint32_t last_key_pressed() const final;
+		uint32_t last_key_released() const final;
+
 		void get_mouse_cursor_position(uint32_t *out_x, uint32_t *out_y, int16_t *out_wheel_delta) const final;
+
+		void block_input_next_frame() final;
 
 		void enumerate_uniform_variables(const char *effect_name, void(*callback)(effect_runtime *runtime, api::effect_uniform_variable variable, void *user_data), void *user_data) final;
 
@@ -98,13 +102,14 @@ namespace reshade
 
 		void get_uniform_variable_type(api::effect_uniform_variable variable, api::format *out_base_type, uint32_t *out_rows, uint32_t *out_columns, uint32_t *out_array_length) const final;
 
-		void get_uniform_variable_name(api::effect_uniform_variable variable, char *name, size_t *length) const final;
+		void get_uniform_variable_name(api::effect_uniform_variable variable, char *name, size_t *name_size) const final;
+		void get_uniform_variable_effect_name(api::effect_uniform_variable variable, char *effect_name, size_t *effect_name_size) const final;
 
 		bool get_annotation_bool_from_uniform_variable(api::effect_uniform_variable variable, const char *name, bool *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_float_from_uniform_variable(api::effect_uniform_variable variable, const char *name, float *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_int_from_uniform_variable(api::effect_uniform_variable variable, const char *name, int32_t *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_uint_from_uniform_variable(api::effect_uniform_variable variable, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
-		bool get_annotation_string_from_uniform_variable(api::effect_uniform_variable variable, const char *name, char *value, size_t *length) const final;
+		bool get_annotation_string_from_uniform_variable(api::effect_uniform_variable variable, const char *name, char *value, size_t *value_size) const final;
 
 		void get_uniform_value_bool(api::effect_uniform_variable variable, bool *values, size_t count, size_t array_index) const final;
 		void get_uniform_value_float(api::effect_uniform_variable variable, float *values, size_t count, size_t array_index) const final;
@@ -120,13 +125,14 @@ namespace reshade
 
 		api::effect_texture_variable find_texture_variable(const char *effect_name, const char *variable_name) const final;
 
-		void get_texture_variable_name(api::effect_texture_variable variable, char *name, size_t *length) const final;
+		void get_texture_variable_name(api::effect_texture_variable variable, char *name, size_t *name_size) const final;
+		void get_texture_variable_effect_name(api::effect_texture_variable variable, char *effect_name, size_t *effect_name_size) const final;
 
 		bool get_annotation_bool_from_texture_variable(api::effect_texture_variable variable, const char *name, bool *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_float_from_texture_variable(api::effect_texture_variable variable, const char *name, float *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_int_from_texture_variable(api::effect_texture_variable variable, const char *name, int32_t *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_uint_from_texture_variable(api::effect_texture_variable variable, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
-		bool get_annotation_string_from_texture_variable(api::effect_texture_variable variable, const char *name, char *value, size_t *length) const final;
+		bool get_annotation_string_from_texture_variable(api::effect_texture_variable variable, const char *name, char *value, size_t *value_size) const final;
 
 		void update_texture(api::effect_texture_variable variable, const uint32_t width, const uint32_t height, const uint8_t *pixels) final;
 
@@ -138,29 +144,30 @@ namespace reshade
 
 		api::effect_technique find_technique(const char *effect_name, const char *technique_name) final;
 
-		void get_technique_name(api::effect_technique technique, char *name, size_t *length) const final;
+		void get_technique_name(api::effect_technique technique, char *name, size_t *name_size) const final;
+		void get_technique_effect_name(api::effect_technique technique, char *effect_name, size_t *effect_name_size) const final;
 
 		bool get_annotation_bool_from_technique(api::effect_technique technique, const char *name, bool *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_float_from_technique(api::effect_technique technique, const char *name, float *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_int_from_technique(api::effect_technique technique, const char *name, int32_t *values, size_t count, size_t array_index = 0) const final;
 		bool get_annotation_uint_from_technique(api::effect_technique technique, const char *name, uint32_t *values, size_t count, size_t array_index = 0) const final;
-		bool get_annotation_string_from_technique(api::effect_technique technique, const char *name, char *value, size_t *length) const final;
+		bool get_annotation_string_from_technique(api::effect_technique technique, const char *name, char *value, size_t *value_size) const final;
 
 		bool get_technique_state(api::effect_technique technique) const final;
 		void set_technique_state(api::effect_technique technique, bool enabled) final;
 
-		bool get_preprocessor_definition(const char *name, char *value, size_t *length) const final;
+		bool get_preprocessor_definition(const char *name, char *value, size_t *value_size) const final;
+		bool get_preprocessor_definition(const char *effect_name, const char *name, char *value, size_t *value_size) const final;
 		void set_preprocessor_definition(const char *name, const char *value) final;
+		void set_preprocessor_definition(const char *effect_name, const char *name, const char *value) final;
 
 		bool get_effects_state() const final;
 		void set_effects_state(bool enabled) final;
 
-		void get_current_preset_path(char *path, size_t *length) const final;
+		void get_current_preset_path(char *path, size_t *path_size) const final;
 		void set_current_preset_path(const char *path) final;
 
 		void reorder_techniques(size_t count, const api::effect_technique *techniques) final;
-
-		void block_input_next_frame() final;
 
 	protected:
 		runtime(api::device *device, api::command_queue *graphics_queue);
@@ -195,7 +202,7 @@ namespace reshade
 
 #if RESHADE_FX
 		void load_current_preset();
-		void save_current_preset() const;
+		void save_current_preset() const final;
 
 		bool switch_to_next_preset(std::filesystem::path filter_path, bool reversed = false);
 
@@ -248,6 +255,8 @@ namespace reshade
 			const T values[4] = { x, y, z, w };
 			set_uniform_value(variable, values, 4, 0);
 		}
+
+		bool get_preprocessor_definition(const std::string &effect_name, const std::string &name, std::vector<std::pair<std::string, std::string>> *&scope, std::vector<std::pair<std::string, std::string>>::iterator &value) const;
 #endif
 
 		bool get_texture_data(api::resource resource, api::resource_usage state, uint8_t *pixels);
@@ -289,8 +298,13 @@ namespace reshade
 		bool _load_option_disable_skipping = false;
 		unsigned int _reload_key_data[4] = {};
 		unsigned int _performance_mode_key_data[4] = {};
+
 		std::vector<std::pair<std::string, std::string>> _global_preprocessor_definitions;
-		std::vector<std::pair<std::string, std::string>> _preset_preprocessor_definitions;
+		std::unordered_map<std::string, std::vector<std::pair<std::string, std::string>>> _preset_preprocessor_definitions;
+#if RESHADE_ADDON
+		size_t _should_save_preprocessor_definitions = std::numeric_limits<size_t>::max();
+#endif
+
 		std::filesystem::path _effect_cache_path;
 		std::vector<std::filesystem::path> _effect_search_paths;
 		std::vector<std::filesystem::path> _texture_search_paths;
@@ -481,8 +495,8 @@ namespace reshade
 		#pragma endregion
 
 		#pragma region Overlay Settings
-		int _font_size = 13;
-		int _editor_font_size = 13;
+		int _font_size = 0;
+		int _editor_font_size = 0;
 		int _style_index = 2;
 		int _editor_style_index = 0;
 		std::filesystem::path _font;
@@ -517,13 +531,14 @@ namespace reshade
 			size_t effect_index;
 			std::filesystem::path file_path;
 			std::string entry_point_name;
-			imgui::code_editor editor;
 			bool selected = false;
+			bool generated = false;
+			imgui::code_editor editor;
 		};
 
 		void open_code_editor(size_t effect_index, const std::string &entry_point);
 		void open_code_editor(size_t effect_index, const std::filesystem::path &path);
-		void open_code_editor(editor_instance &instance);
+		void open_code_editor(editor_instance &instance) const;
 		void draw_code_editor(editor_instance &instance);
 
 		std::vector<editor_instance> _editors;
