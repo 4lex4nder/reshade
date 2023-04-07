@@ -57,7 +57,7 @@ namespace reshade
 		/// <summary>
 		/// Gets a boolean indicating whether effects are being loaded.
 		/// </summary>
-		bool is_loading() const { return _reload_remaining_effects != std::numeric_limits<size_t>::max(); }
+		bool is_loading() const { return _reload_remaining_effects != std::numeric_limits<size_t>::max() || !_reload_create_queue.empty() || (!_textures_loaded && _is_initialized); }
 #else
 		bool is_loading() const { return false; }
 #endif
@@ -157,9 +157,9 @@ namespace reshade
 		void set_technique_state(api::effect_technique technique, bool enabled) final;
 
 		bool get_preprocessor_definition(const char *name, char *value, size_t *value_size) const final;
-		bool get_preprocessor_definition(const char *effect_name, const char *name, char *value, size_t *value_size) const final;
+		bool get_preprocessor_definition_for_effect(const char *effect_name, const char *name, char *value, size_t *value_size) const final;
 		void set_preprocessor_definition(const char *name, const char *value) final;
-		void set_preprocessor_definition(const char *effect_name, const char *name, const char *value) final;
+		void set_preprocessor_definition_for_effect(const char *effect_name, const char *name, const char *value) final;
 
 		bool get_effects_state() const final;
 		void set_effects_state(bool enabled) final;
@@ -301,9 +301,7 @@ namespace reshade
 
 		std::vector<std::pair<std::string, std::string>> _global_preprocessor_definitions;
 		std::unordered_map<std::string, std::vector<std::pair<std::string, std::string>>> _preset_preprocessor_definitions;
-#if RESHADE_ADDON
-		size_t _should_save_preprocessor_definitions = std::numeric_limits<size_t>::max();
-#endif
+		size_t _should_reload_effect = std::numeric_limits<size_t>::max();
 
 		std::filesystem::path _effect_cache_path;
 		std::vector<std::filesystem::path> _effect_search_paths;

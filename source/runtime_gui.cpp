@@ -40,8 +40,8 @@ static void parse_errors(const std::string_view &errors, F &&callback)
 	for (size_t offset = 0, next; offset != std::string_view::npos; offset = next)
 	{
 		const size_t pos_error = errors.find(": ", offset);
-		const size_t pos_error_line = errors.rfind('(', pos_error); // Paths can contain '(', but no ": ", so search backwards from th error location to find the line info
-		if (pos_error == std::string_view::npos || pos_error_line == std::string_view::npos)
+		const size_t pos_error_line = errors.rfind('(', pos_error); // Paths can contain '(', but no ": ", so search backwards from the error location to find the line info
+		if (pos_error == std::string_view::npos || pos_error_line == std::string_view::npos || pos_error_line < offset)
 			break;
 
 		const size_t pos_linefeed = errors.find('\n', pos_error);
@@ -1098,12 +1098,9 @@ void reshade::runtime::draw_gui()
 	}
 
 #if RESHADE_ADDON
-	// Do not show add-on overlays while loading in case they are still referencing any variable or technique handles
-	if (!is_loading()
-#if RESHADE_ADDON_LITE
-		&& addon_enabled
-#endif
-		)
+#  if RESHADE_ADDON_LITE
+	if (addon_enabled)
+#  endif
 	{
 		for (const addon_info &info : addon_loaded_info)
 		{
@@ -1117,9 +1114,9 @@ void reshade::runtime::draw_gui()
 				ImGui::End();
 			}
 		}
-	}
 
-	invoke_addon_event<addon_event::reshade_overlay>(this);
+		invoke_addon_event<addon_event::reshade_overlay>(this);
+	}
 #endif
 
 #if RESHADE_FX
@@ -1142,7 +1139,7 @@ void reshade::runtime::draw_gui()
 		}
 
 		// The preview texture is unset in 'destroy_effect', so should not be able to reach this while loading
-		assert(!is_loading() && _reload_create_queue.empty());
+		assert(!is_loading());
 
 		// Scale image to fill the entire viewport by default
 		ImVec2 preview_min = ImVec2(0, 0);
@@ -1216,6 +1213,8 @@ void reshade::runtime::draw_gui_home()
 	if (_performance_mode && _tutorial_index <= 3)
 		_tutorial_index = 4;
 
+	const float auto_save_button_spacing = 2.0f;
+
 	if (_tutorial_index > 0)
 	{
 		if (_tutorial_index == 1)
@@ -1261,7 +1260,7 @@ void reshade::runtime::draw_gui_home()
 		ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
 
 		const auto browse_button_pos = ImGui::GetCursorScreenPos();
-		const auto browse_button_width = ImGui::GetContentRegionAvail().x - (_imgui_context->Style.ItemSpacing.x + 3.0f + 11.0f * _font_size);
+		const auto browse_button_width = ImGui::GetContentRegionAvail().x - (_imgui_context->Style.ItemSpacing.x + auto_save_button_spacing + 11.0f * _font_size);
 
 		const std::string browse_button_label = _current_preset_path.stem().u8string() + "###browse_button";
 
@@ -1303,20 +1302,24 @@ void reshade::runtime::draw_gui_home()
 		ImGui::SameLine();
 
 		const bool was_auto_save_preset = _auto_save_preset;
-		if (imgui::toggle_button(was_auto_save_preset ? "Auto Save on###auto_save" : "Auto Save###auto_save", _auto_save_preset, 3.0f + (11.0f * _font_size) - (button_spacing + button_size) * (was_auto_save_preset ? 2 : 3)))
+		if (imgui::toggle_button(was_auto_save_preset ? "Auto Save on###auto_save" : "Auto Save###auto_save", _auto_save_preset, (was_auto_save_preset ? 0.0f : auto_save_button_spacing) + (11.0f * _font_size) - (button_spacing + button_size) * (was_auto_save_preset ? 2 : 3)))
 		{
 			_preset_is_modified = false;
 
 			save_config();
 		}
 
-		ImGui::SameLine(0, button_spacing);
-
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("Save current preset automatically on every modification");
 
-		if (!was_auto_save_preset)
+		if (was_auto_save_preset)
 		{
+			ImGui::SameLine(0, button_spacing + auto_save_button_spacing);
+		}
+		else
+		{
+			ImGui::SameLine(0, button_spacing);
+
 			ImGui::BeginDisabled(!_preset_is_modified);
 
 			if (imgui::confirm_button(ICON_FK_UNDO, button_size, "Do you really want to reset all techniques and values?"))
@@ -1468,7 +1471,7 @@ void reshade::runtime::draw_gui_home()
 		ImGui::Spacing();
 	}
 
-	if (is_loading())
+	if (_reload_remaining_effects != std::numeric_limits<size_t>::max())
 	{
 		const char *const loading_message = ICON_FK_REFRESH " Loading ... ";
 		ImGui::SetCursorPos((ImGui::GetWindowSize() - ImGui::CalcTextSize(loading_message)) * 0.5f);
@@ -1481,7 +1484,7 @@ void reshade::runtime::draw_gui_home()
 
 	if (_tutorial_index > 1)
 	{
-		if (imgui::search_input_box(_effect_filter, sizeof(_effect_filter), -((_variable_editor_tabs ? 1 : 2) * (_imgui_context->Style.ItemSpacing.x + 3.0f + 11.0f * _font_size))))
+		if (imgui::search_input_box(_effect_filter, sizeof(_effect_filter), -((_variable_editor_tabs ? 1 : 2) * (_imgui_context->Style.ItemSpacing.x + 2.0f + 11.0f * _font_size))))
 		{
 			_effects_expanded_state = 3;
 
@@ -1499,7 +1502,7 @@ void reshade::runtime::draw_gui_home()
 
 		ImGui::BeginDisabled(_is_in_between_presets_transition);
 
-		if (ImGui::Button("Active to top", ImVec2(3.0f + 11.0f * _font_size, 0)))
+		if (ImGui::Button("Active to top", ImVec2(auto_save_button_spacing + 11.0f * _font_size, 0)))
 		{
 			std::vector<size_t> technique_indices = _technique_sorting;
 
@@ -1527,7 +1530,7 @@ void reshade::runtime::draw_gui_home()
 		{
 			ImGui::SameLine();
 
-			if (ImGui::Button((_effects_expanded_state & 2) ? "Collapse all" : "Expand all", ImVec2(3.0f + 11.0f * _font_size, 0)))
+			if (ImGui::Button((_effects_expanded_state & 2) ? "Collapse all" : "Expand all", ImVec2(auto_save_button_spacing + 11.0f * _font_size, 0)))
 				_effects_expanded_state = (~_effects_expanded_state & 2) | 1;
 		}
 

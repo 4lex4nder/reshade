@@ -590,8 +590,7 @@ void reshade::d3d12::device_impl::update_buffer_region(const void *data, api::re
 	com_ptr<ID3D12Resource> intermediate;
 	if (FAILED(_orig->CreateCommittedResource(&upload_heap_props, D3D12_HEAP_FLAG_NONE, &intermediate_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&intermediate))))
 	{
-		LOG(ERROR) << "Failed to create upload buffer!";
-		LOG(DEBUG) << "> Details: Width = " << intermediate_desc.Width;
+		LOG(ERROR) << "Failed to create upload buffer (width = " << intermediate_desc.Width << ")!";
 		return;
 	}
 	intermediate->SetName(L"ReShade upload buffer");
@@ -657,8 +656,7 @@ void reshade::d3d12::device_impl::update_texture_region(const api::subresource_d
 	com_ptr<ID3D12Resource> intermediate;
 	if (FAILED(_orig->CreateCommittedResource(&upload_heap_props, D3D12_HEAP_FLAG_NONE, &intermediate_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&intermediate))))
 	{
-		LOG(ERROR) << "Failed to create upload buffer!";
-		LOG(DEBUG) << "> Details: Width = " << intermediate_desc.Width;
+		LOG(ERROR) << "Failed to create upload buffer (width = " << intermediate_desc.Width << ")!";
 		return;
 	}
 	intermediate->SetName(L"ReShade upload buffer");
@@ -668,6 +666,8 @@ void reshade::d3d12::device_impl::update_texture_region(const api::subresource_d
 	if (FAILED(ID3D12Resource_Map(intermediate.get(), 0, nullptr, reinterpret_cast<void **>(&mapped_data))))
 		return;
 
+	const size_t row_size = data.row_pitch < row_pitch ? data.row_pitch : static_cast<size_t>(row_pitch);
+
 	for (size_t z = 0; z < num_slices; ++z)
 	{
 		const auto dst_slice = mapped_data + z * slice_pitch;
@@ -675,8 +675,6 @@ void reshade::d3d12::device_impl::update_texture_region(const api::subresource_d
 
 		for (size_t y = 0; y < num_rows; ++y)
 		{
-			const size_t row_size = data.row_pitch < row_pitch ?
-				data.row_pitch : static_cast<size_t>(row_pitch);
 			std::memcpy(
 				dst_slice + y * row_pitch,
 				src_slice + y * data.row_pitch, row_size);

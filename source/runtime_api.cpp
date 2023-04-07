@@ -465,7 +465,7 @@ void reshade::runtime::set_uniform_value_uint([[maybe_unused]] api::effect_unifo
 void reshade::runtime::enumerate_texture_variables([[maybe_unused]] const char *effect_name, [[maybe_unused]] void(*callback)(effect_runtime *runtime, api::effect_texture_variable variable, void *user_data), [[maybe_unused]] void *user_data)
 {
 #if RESHADE_FX
-	if (is_loading() || !_reload_create_queue.empty())
+	if (is_loading())
 		return;
 
 	for (const texture &variable : _textures)
@@ -485,7 +485,7 @@ void reshade::runtime::enumerate_texture_variables([[maybe_unused]] const char *
 reshade::api::effect_texture_variable reshade::runtime::find_texture_variable([[maybe_unused]] const char *effect_name, [[maybe_unused]] const char *variable_name) const
 {
 #if RESHADE_FX
-	if (is_loading() || !_reload_create_queue.empty())
+	if (is_loading())
 		return { 0 };
 
 	for (const texture &variable : _textures)
@@ -1011,9 +1011,9 @@ void reshade::runtime::set_technique_state([[maybe_unused]] api::effect_techniqu
 
 void reshade::runtime::set_preprocessor_definition(const char *name, const char *value)
 {
-	set_preprocessor_definition(nullptr, name, value);
+	set_preprocessor_definition_for_effect(nullptr, name, value);
 }
-void reshade::runtime::set_preprocessor_definition([[maybe_unused]] const char *effect_name, [[maybe_unused]] const char *name, [[maybe_unused]] const char *value)
+void reshade::runtime::set_preprocessor_definition_for_effect([[maybe_unused]] const char *effect_name, [[maybe_unused]] const char *name, [[maybe_unused]] const char *value)
 {
 #if RESHADE_FX
 	if (name == nullptr)
@@ -1064,26 +1064,24 @@ void reshade::runtime::set_preprocessor_definition([[maybe_unused]] const char *
 			_preset_preprocessor_definitions[effect_name_string].emplace_back(name, value);
 	}
 
-#  if RESHADE_ADDON
 	if (effect_name_string.empty())
 	{
-		_should_save_preprocessor_definitions = _effects.size();
+		_should_reload_effect = _effects.size();
 	}
 	else
 	{
 		const size_t effect_index = std::distance(_effects.cbegin(), std::find_if(_effects.cbegin(), _effects.cend(),
 			[effect_name = std::filesystem::u8path(effect_name_string)](const effect &effect) { return effect_name == effect.source_file.filename(); }));
 
-		_should_save_preprocessor_definitions = _should_save_preprocessor_definitions < _effects.size() && _should_save_preprocessor_definitions != effect_index ? _effects.size() : effect_index;
+		_should_reload_effect = _should_reload_effect != std::numeric_limits<size_t>::max() && _should_reload_effect != effect_index ? _effects.size() : effect_index;
 	}
-#  endif
 #endif
 }
 bool reshade::runtime::get_preprocessor_definition(const char *name, char *value, size_t *size) const
 {
-	return get_preprocessor_definition(nullptr, name, value, size);
+	return get_preprocessor_definition_for_effect(nullptr, name, value, size);
 }
-bool reshade::runtime::get_preprocessor_definition([[maybe_unused]] const char *effect_name, const char *name, [[maybe_unused]] char *value, size_t *size) const
+bool reshade::runtime::get_preprocessor_definition_for_effect([[maybe_unused]] const char *effect_name, const char *name, [[maybe_unused]] char *value, size_t *size) const
 {
 #if RESHADE_FX
 	const std::string effect_name_string = effect_name != nullptr ? effect_name : std::string();
@@ -1162,23 +1160,24 @@ void reshade::runtime::render_technique(api::effect_technique handle, api::comma
 		std::find(_reload_create_queue.cbegin(), _reload_create_queue.cend(), tech->effect_index) == _reload_create_queue.cend())
 		_reload_create_queue.push_back(tech->effect_index);
 
-	if (is_loading() || tech->passes_data.empty() || rtv == 0)
+	if (rtv == 0 || is_loading())
 		return;
-
 	if (rtv_srgb == 0)
 		rtv_srgb = rtv;
 
 	const api::resource back_buffer_resource = _device->get_resource_from_view(rtv);
 
 #  if RESHADE_ADDON
-	const api::resource_desc back_buffer_desc = _device->get_resource_desc(back_buffer_resource);
-	if (back_buffer_desc.texture.samples > 1)
-		return; // Multisampled render targets are not supported
+	{
+		const api::resource_desc back_buffer_desc = _device->get_resource_desc(back_buffer_resource);
+		if (back_buffer_desc.texture.samples > 1)
+			return; // Multisampled render targets are not supported
 
-	// Ensure dimensions and format of the effect color resource matches that of the input back buffer resource (so that the copy to the effect color resource succeeds)
-	// Changing dimensions or format can cause effects to be reloaded, in which case need to wait for that to finish before rendering
-	if (!update_effect_color_and_stencil_tex(back_buffer_desc.texture.width, back_buffer_desc.texture.height, back_buffer_desc.texture.format, _effect_stencil_format) || is_loading())
-		return;
+		// Ensure dimensions and format of the effect color resource matches that of the input back buffer resource (so that the copy to the effect color resource succeeds)
+		// Never perform an immediate reload here, as the list of techniques must not be modified in case this was called from within 'enumerate_techniques'!
+		if (!update_effect_color_and_stencil_tex(back_buffer_desc.texture.width, back_buffer_desc.texture.height, back_buffer_desc.texture.format, _effect_stencil_format))
+			return;
+	}
 
 	invoke_addon_event<addon_event::reshade_begin_effects>(this, cmd_list, rtv, rtv_srgb);
 
