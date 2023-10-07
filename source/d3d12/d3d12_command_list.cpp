@@ -150,6 +150,8 @@ HRESULT STDMETHODCALLTYPE D3D12GraphicsCommandList::Reset(ID3D12CommandAllocator
 	_current_root_signature[1] = nullptr;
 	_current_descriptor_heaps[0] = nullptr;
 	_current_descriptor_heaps[1] = nullptr;
+	_current_descriptor_heaps_actual[0] = nullptr;
+	_current_descriptor_heaps_actual[1] = nullptr;
 
 	const HRESULT hr = _orig->Reset(pAllocator, pInitialState);
 #if RESHADE_ADDON >= 2
@@ -470,7 +472,10 @@ void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetDescriptorHeaps(UINT NumDesc
 	_orig->SetDescriptorHeaps(NumDescriptorHeaps, ppDescriptorHeaps);
 
 	for (UINT i = 0; i < 2; ++i)
+	{
 		_current_descriptor_heaps[i] = i < NumDescriptorHeaps ? ppDescriptorHeaps[i] : nullptr;
+		_current_descriptor_heaps_actual[i] = i < NumDescriptorHeaps ? ppDescriptorHeaps[i] : nullptr;
+	}
 }
 void STDMETHODCALLTYPE D3D12GraphicsCommandList::SetComputeRootSignature(ID3D12RootSignature *pRootSignature)
 {

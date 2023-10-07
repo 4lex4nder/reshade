@@ -426,6 +426,11 @@ void reshade::d3d12::command_list_impl::bind_descriptor_tables(api::shader_stage
 		std::copy_n(heaps, 2, _current_descriptor_heaps);
 		_orig->SetDescriptorHeaps(heaps[1] != nullptr ? 2 : 1, heaps);
 	}
+	else if (count == 0 && tables == nullptr)
+	{
+		std::copy_n(_current_descriptor_heaps_actual, 2, _current_descriptor_heaps);
+		_orig->SetDescriptorHeaps(_current_descriptor_heaps[1] != nullptr ? 2 : 1, _current_descriptor_heaps);
+	}
 
 	const auto root_signature = reinterpret_cast<ID3D12RootSignature *>(layout.handle);
 

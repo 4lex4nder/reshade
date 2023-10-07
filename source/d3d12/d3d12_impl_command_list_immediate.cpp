@@ -70,6 +70,8 @@ bool reshade::d3d12::command_list_immediate_impl::flush()
 	_current_root_signature[1] = nullptr;
 	_current_descriptor_heaps[0] = nullptr;
 	_current_descriptor_heaps[1] = nullptr;
+	_current_descriptor_heaps_actual[0] = nullptr;
+	_current_descriptor_heaps_actual[1] = nullptr;
 
 	assert(_orig != nullptr);
 
