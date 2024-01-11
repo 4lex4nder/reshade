@@ -203,6 +203,8 @@ namespace reshade
 		void clear_effect_cache();
 
 		bool update_effect_color_and_stencil_tex(uint32_t width, uint32_t height, api::format color_format, api::format stencil_format);
+		void clean_color_buffer_cache(bool clean_all = false);
+		void reset_color_buffer_cache_usage();
 
 		void update_effects();
 		void render_technique(technique &technique, api::command_list *cmd_list, api::resource back_buffer_resource, api::resource_view back_buffer_rtv, api::resource_view back_buffer_rtv_srgb);
@@ -329,6 +331,51 @@ namespace reshade
 
 		std::unordered_map<size_t, api::sampler> _effect_sampler_states;
 		std::unordered_map<std::string, std::pair<api::resource_view, api::resource_view>> _texture_semantic_bindings;
+
+
+		struct color_buffer_cache_format
+		{
+			constexpr color_buffer_cache_format() {}
+			constexpr color_buffer_cache_format(const api::format f, uint32_t w, uint32_t h) : format(f), width(w), height(h) {}
+		
+			const api::format format = {};
+			uint32_t width = 0;
+			uint32_t height = 0;
+		
+			bool operator==(const color_buffer_cache_format &rhs) const
+			{
+				return format == rhs.format && width == rhs.width && height == rhs.height;
+			}
+		};
+		
+		struct color_buffer_cache_record
+		{
+			constexpr color_buffer_cache_record() {}
+			constexpr color_buffer_cache_record(api::resource color_tex, api::resource_view color_srv, api::resource_view color_srv_srgb, api::resource stencil_tex, api::resource_view stencil_dsv) :
+				effect_color_tex(color_tex), effect_color_srv(color_srv), effect_color_srv_srgb(color_srv_srgb), effect_stencil_tex(stencil_tex), effect_stencil_dsv(stencil_dsv) {}
+		
+			api::resource effect_color_tex = {};
+			api::resource_view effect_color_srv = {};
+			api::resource_view effect_color_srv_srgb {};
+		
+			api::resource effect_stencil_tex = {};
+			api::resource_view effect_stencil_dsv = {};
+		
+			bool used = true;
+		};
+		
+		struct color_buffer_cache_format_hash : std::hash<uint64_t>
+		{
+			size_t operator()(const color_buffer_cache_format& cache_format) const
+			{
+				return std::hash<uint64_t>::operator()(
+					std::hash<uint64_t>::operator()(static_cast<uint64_t>(cache_format.height)) ^
+					std::hash<uint64_t>::operator()(static_cast<uint64_t>(cache_format.width)) ^
+					std::hash<uint64_t>::operator()(static_cast<uint64_t>(cache_format.format)));
+			}
+		};
+
+		std::unordered_map<color_buffer_cache_format, color_buffer_cache_record, color_buffer_cache_format_hash> _effect_color_cache;
 #if RESHADE_ADDON == 1
 		std::unordered_map<std::string, std::pair<api::resource_view, api::resource_view>> _backup_texture_semantic_bindings;
 #endif
