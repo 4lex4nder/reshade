@@ -484,16 +484,13 @@ exit_failure:
 	_device->destroy_resource_view(_empty_srv);
 	_empty_srv = {};
 
-	_device->destroy_resource(_effect_color_tex);
+	clean_color_buffer_cache(true);
+
 	_effect_color_tex = {};
-	_device->destroy_resource_view(_effect_color_srv[0]);
 	_effect_color_srv[0] = {};
-	_device->destroy_resource_view(_effect_color_srv[1]);
 	_effect_color_srv[1] = {};
 
-	_device->destroy_resource(_effect_stencil_tex);
 	_effect_stencil_tex = {};
-	_device->destroy_resource_view(_effect_stencil_dsv);
 	_effect_stencil_dsv = {};
 #endif
 
@@ -542,16 +539,13 @@ void reshade::runtime::on_reset()
 	_device->destroy_resource_view(_empty_srv);
 	_empty_srv = {};
 
-	_device->destroy_resource(_effect_color_tex);
+	clean_color_buffer_cache(true);
+
 	_effect_color_tex = {};
-	_device->destroy_resource_view(_effect_color_srv[0]);
 	_effect_color_srv[0] = {};
-	_device->destroy_resource_view(_effect_color_srv[1]);
 	_effect_color_srv[1] = {};
 
-	_device->destroy_resource(_effect_stencil_tex);
 	_effect_stencil_tex = {};
-	_device->destroy_resource_view(_effect_stencil_dsv);
 	_effect_stencil_dsv = {};
 #else
 	for (std::thread &thread : _worker_threads)
@@ -883,6 +877,9 @@ void reshade::runtime::on_present(api::command_queue *present_queue)
 #endif
 #if RESHADE_FX
 	_effects_rendered_this_frame = false;
+
+	clean_color_buffer_cache();
+	reset_color_buffer_cache_usage();
 #endif
 
 	// Apply previous state from application
@@ -3658,40 +3655,98 @@ void reshade::runtime::clear_effect_cache()
 		LOG(ERROR) << "Failed to clear effect cache directory with error code " << ec.value() << '!';
 }
 
+void reshade::runtime::clean_color_buffer_cache(bool clean_all)
+{
+	for (auto it = _effect_color_cache.begin(); it != _effect_color_cache.end();)
+	{
+		if (!it->second.used && _effect_color_tex != it->second.effect_color_tex || clean_all)
+		{
+			if (_device->get_api() == api::device_api::d3d12 || _device->get_api() == api::device_api::vulkan)
+				_graphics_queue->wait_idle();
+
+			_device->destroy_resource(it->second.effect_color_tex);
+			_device->destroy_resource_view(it->second.effect_color_srv);
+			_device->destroy_resource_view(it->second.effect_color_srv_srgb);
+
+			_device->destroy_resource(it->second.effect_stencil_tex);
+			_device->destroy_resource_view(it->second.effect_stencil_dsv);
+
+			it = _effect_color_cache.erase(it);
+			continue;
+		}
+
+		it++;
+	}
+}
+
+void reshade::runtime::reset_color_buffer_cache_usage()
+{
+	for (auto &buffer_record : _effect_color_cache)
+	{
+		buffer_record.second.used = false;
+	}
+}
+
 bool reshade::runtime::update_effect_color_and_stencil_tex(uint32_t width, uint32_t height, api::format color_format, api::format stencil_format)
 {
 	assert(width != 0 && height != 0);
 	assert(color_format != api::format::unknown && stencil_format != api::format::unknown);
 
 	const api::format color_format_typeless = api::format_to_typeless(color_format);
+	const color_buffer_cache_format cached_format_key = color_buffer_cache_format { color_format_typeless, width, height };
 
-	if (_effect_color_tex != 0)
+	if (_effect_width == width && _effect_height == height && _effect_color_format == color_format_typeless && _effect_stencil_format == stencil_format)
+		return true;
+
+	auto &effect_color_cached = _effect_color_cache.find(cached_format_key);
+
+	if (effect_color_cached != _effect_color_cache.end())
 	{
-		if (_effect_width == width && _effect_height == height && _effect_color_format == color_format_typeless && _effect_stencil_format == stencil_format)
-			return true;
+		_effect_color_tex = effect_color_cached->second.effect_color_tex;
+		_effect_color_srv[0] = effect_color_cached->second.effect_color_srv;
+		_effect_color_srv[1] = effect_color_cached->second.effect_color_srv_srgb;
 
-		if (_device->get_api() == api::device_api::d3d12 || _device->get_api() == api::device_api::vulkan)
-			_graphics_queue->wait_idle();
+		_effect_stencil_tex = effect_color_cached->second.effect_stencil_tex;
+		_effect_stencil_dsv = effect_color_cached->second.effect_stencil_dsv;
 
-		_device->destroy_resource(_effect_color_tex);
-		_effect_color_tex = {};
-		_device->destroy_resource_view(_effect_color_srv[0]);
-		_effect_color_srv[0] = {};
-		_device->destroy_resource_view(_effect_color_srv[1]);
-		_effect_color_srv[1] = {};
-
-		_device->destroy_resource(_effect_stencil_tex);
-		_effect_stencil_tex = {};
-		_device->destroy_resource_view(_effect_stencil_dsv);
-		_effect_stencil_dsv = {};
+		effect_color_cached->second.used = true;
 	}
-
-	if (!_device->create_resource(
+	else
+	{
+		if (!_device->create_resource(
 			api::resource_desc(width, height, 1, 1, color_format_typeless, 1, api::memory_heap::gpu_only, api::resource_usage::copy_dest | api::resource_usage::shader_resource),
 			nullptr, api::resource_usage::shader_resource, &_effect_color_tex))
-	{
-		LOG(ERROR) << "Failed to create effect color resource (width = " << width << ", height = " << height << ", format = " << static_cast<uint32_t>(color_format_typeless) << ")!";
-		return false;
+		{
+			LOG(ERROR) << "Failed to create effect color resource (width = " << width << ", height = " << height << ", format = " << static_cast<uint32_t>(color_format_typeless) << ")!";
+			return false;
+		}
+
+		_device->set_resource_name(_effect_color_tex, "ReShade back buffer");
+
+		if (!_device->create_resource_view(_effect_color_tex, api::resource_usage::shader_resource, api::resource_view_desc(api::format_to_default_typed(color_format, 0)), &_effect_color_srv[0]) ||
+			!_device->create_resource_view(_effect_color_tex, api::resource_usage::shader_resource, api::resource_view_desc(api::format_to_default_typed(color_format, 1)), &_effect_color_srv[1]))
+		{
+			LOG(ERROR) << "Failed to create effect color resource view (format = " << static_cast<uint32_t>(color_format) << ")!";
+			return false;
+		}
+
+		if (!_device->create_resource(
+			api::resource_desc(width, height, 1, 1, stencil_format, 1, api::memory_heap::gpu_only, api::resource_usage::depth_stencil),
+			nullptr, api::resource_usage::depth_stencil_write, &_effect_stencil_tex))
+		{
+			LOG(ERROR) << "Failed to create effect stencil resource (width = " << width << ", height = " << height << ", format = " << static_cast<uint32_t>(stencil_format) << ")!";
+			return false;
+		}
+
+		_device->set_resource_name(_effect_stencil_tex, "ReShade effect stencil");
+
+		if (!_device->create_resource_view(_effect_stencil_tex, api::resource_usage::depth_stencil, api::resource_view_desc(stencil_format), &_effect_stencil_dsv))
+		{
+			LOG(ERROR) << "Failed to create effect stencil resource view (format = " << static_cast<uint32_t>(stencil_format) << ")!";
+			return false;
+		}
+
+		_effect_color_cache.emplace(cached_format_key, color_buffer_cache_record { _effect_color_tex, _effect_color_srv[0], _effect_color_srv[1], _effect_stencil_tex, _effect_stencil_dsv });
 	}
 
 #if RESHADE_ADDON
@@ -3702,15 +3757,7 @@ bool reshade::runtime::update_effect_color_and_stencil_tex(uint32_t width, uint3
 	_effect_width = width;
 	_effect_height = height;
 	_effect_color_format = color_format_typeless;
-
-	_device->set_resource_name(_effect_color_tex, "ReShade back buffer");
-
-	if (!_device->create_resource_view(_effect_color_tex, api::resource_usage::shader_resource, api::resource_view_desc(api::format_to_default_typed(color_format, 0)), &_effect_color_srv[0]) ||
-		!_device->create_resource_view(_effect_color_tex, api::resource_usage::shader_resource, api::resource_view_desc(api::format_to_default_typed(color_format, 1)), &_effect_color_srv[1]))
-	{
-		LOG(ERROR) << "Failed to create effect color resource view (format = " << static_cast<uint32_t>(color_format) << ")!";
-		return false;
-	}
+	_effect_stencil_format = stencil_format;
 
 	update_texture_bindings("COLOR", _effect_color_srv[0], _effect_color_srv[1]);
 
@@ -3733,24 +3780,6 @@ bool reshade::runtime::update_effect_color_and_stencil_tex(uint32_t width, uint3
 		}
 	}
 #endif
-
-	if (!_device->create_resource(
-			api::resource_desc(width, height, 1, 1, stencil_format, 1, api::memory_heap::gpu_only, api::resource_usage::depth_stencil),
-			nullptr, api::resource_usage::depth_stencil_write, &_effect_stencil_tex))
-	{
-		LOG(ERROR) << "Failed to create effect stencil resource (width = " << width << ", height = " << height << ", format = " << static_cast<uint32_t>(stencil_format) << ")!";
-		return false;
-	}
-
-	_effect_stencil_format = stencil_format;
-
-	_device->set_resource_name(_effect_stencil_tex, "ReShade effect stencil");
-
-	if (!_device->create_resource_view(_effect_stencil_tex, api::resource_usage::depth_stencil, api::resource_view_desc(stencil_format), &_effect_stencil_dsv))
-	{
-		LOG(ERROR) << "Failed to create effect stencil resource view (format = " << static_cast<uint32_t>(stencil_format) << ")!";
-		return false;
-	}
 
 	return true;
 }
